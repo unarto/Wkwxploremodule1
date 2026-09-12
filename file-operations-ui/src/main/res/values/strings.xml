@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [Jalur Class/Modul]: file-operations-ui/src/main/res/values/strings.xml -->
+<!-- [Penjelasan]: String lokalisasi untuk komponen UI operasi berkas (konflik dan progress dialog) di modul file-operations-ui. -->
+<resources>
+    <string name="title_conflict_folder">Konflik Nama Folder</string>
+    <string name="title_conflict_file">Konflik Nama Berkas</string>
+    <string name="msg_conflict_target_exists">%1$s sudah ada di lokasi tujuan.</string>
+    <string name="msg_conflict_item_count">Item %1$d dari %2$d</string>
+    <string name="label_conflict_apply_to_all">Terapkan ke semua benturan berikutnya</string>
+    <string name="btn_conflict_skip">Lewati</string>
+    <string name="btn_conflict_overwrite">Timpa</string>
+    <string name="btn_conflict_rename">Ganti Nama</string>
+    <string name="btn_conflict_cancel">Batal</string>
+
+    <string name="title_processing_operation">Memproses Operasi...</string>
+    <string name="msg_operation_progress">%1$s...</string>
+    <string name="btn_cancel_operation">Batal</string>
+</resources>

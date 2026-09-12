@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- [Jalur Class/Modul]: core-worker/src/main/res/values/strings.xml -->
+<!-- [Penjelasan]: Resource string untuk notifikasi background FileCopyService pada modul :core-worker. -->
+<resources>
+    <string name="notification_channel_name">Operasi Berkas</string>
+    <string name="notification_channel_desc">Menampilkan progres operasi berkas di latar belakang</string>
+    <string name="notification_title_processing">Memproses Berkas...</string>
+</resources>
