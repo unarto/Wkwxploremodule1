@@ -18,7 +18,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 class FileRepositoryImpl(
@@ -82,8 +86,8 @@ class FileRepositoryImpl(
         }
     }
 
-    override fun copy(source: StorageLocation, destination: StorageLocation): Flow<FileOperationResult<FileOperationProgress>> = flow {
-        try {
+    override fun copy(source: StorageLocation, destination: StorageLocation): Flow<FileOperationResult<FileOperationProgress>> =
+        flow {
             val sourceType = backendClassifier.classify(source)
             val destType = backendClassifier.classify(destination)
 
@@ -99,18 +103,21 @@ class FileRepositoryImpl(
                 bridge.copyCross(source, destination, sourceType, destType)
             }
 
-            progressFlow.collect { progress ->
-                emit(FileOperationResult.Success(progress))
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            emit(FileOperationResult.Failure(storageErrorMapper.map(e)))
+            emitAll(progressFlow.map<FileOperationProgress, FileOperationResult<FileOperationProgress>> { progress ->
+                FileOperationResult.Success(progress)
+            })
         }
-    }
+            .catch { error ->
+                when (error) {
+                    is CancellationException -> throw error
+                    is Exception -> emit(FileOperationResult.Failure(storageErrorMapper.map(error)))
+                    else -> throw error
+                }
+            }
+            .flowOn(ioDispatcher)
 
-    override fun move(source: StorageLocation, destination: StorageLocation): Flow<FileOperationResult<FileOperationProgress>> = flow {
-        try {
+    override fun move(source: StorageLocation, destination: StorageLocation): Flow<FileOperationResult<FileOperationProgress>> =
+        flow {
             val sourceType = backendClassifier.classify(source)
             val destType = backendClassifier.classify(destination)
 
@@ -126,15 +133,17 @@ class FileRepositoryImpl(
                 bridge.moveCross(source, destination, sourceType, destType)
             }
 
-            progressFlow.collect { progress ->
-                emit(FileOperationResult.Success(progress))
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            emit(FileOperationResult.Failure(storageErrorMapper.map(e)))
+            emitAll(progressFlow.map<FileOperationProgress, FileOperationResult<FileOperationProgress>> { progress ->
+                FileOperationResult.Success(progress)
+            })
         }
-    }
+            .catch { error ->
+                when (error) {
+                    is CancellationException -> throw error
+                    is Exception -> emit(FileOperationResult.Failure(storageErrorMapper.map(error)))
+                    else -> throw error
+                }
+            }
+            .flowOn(ioDispatcher)
 
 }
-
