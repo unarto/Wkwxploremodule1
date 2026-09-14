@@ -4,14 +4,13 @@ package com.wakwau.xplore.fileoperations.client
 
 import com.wakwau.xplore.core.storage.model.StorageLocation
 import com.wakwau.xplore.core.storage.operation.BackgroundOperationType
-import com.wakwau.xplore.core.storage.operation.FileOperationProgress
-import com.wakwau.xplore.core.storage.operation.FileOperationResult
+import com.wakwau.xplore.core.storage.operation.BackgroundOperationEvent
 import com.wakwau.xplore.fileoperations.conflict.ResolvedTransferItem
 import kotlinx.coroutines.flow.Flow
 
 interface BackgroundOperationClient {
-    fun enqueueOperation(type: BackgroundOperationType, sources: List<StorageLocation>, destination: StorageLocation? = null)
-    fun enqueueResolvedOperation(type: BackgroundOperationType, resolvedItems: List<ResolvedTransferItem>)
+    fun enqueueOperation(type: BackgroundOperationType, sources: List<StorageLocation>, destination: StorageLocation? = null): String
+    fun enqueueResolvedOperation(type: BackgroundOperationType, resolvedItems: List<ResolvedTransferItem>): String
     fun cancelOperation()
-    fun observeProgress(): Flow<FileOperationResult<FileOperationProgress>>
+    fun observeProgress(): Flow<BackgroundOperationEvent>
 }

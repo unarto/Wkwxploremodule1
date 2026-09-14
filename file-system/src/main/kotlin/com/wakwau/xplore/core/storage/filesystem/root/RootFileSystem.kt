@@ -178,7 +178,7 @@ class RootFileSystem(
         }
 
         if (sourceFile.isDirectory) {
-            directoryListingHelper.copyDirectoryRecursively(sourceFile, destFile, totalBytes) { incrementalBytes, fileName ->
+            directoryListingHelper.copyDirectoryTransactionally(sourceFile, destFile, totalBytes) { incrementalBytes, fileName ->
                 totalCopied += incrementalBytes
                 emit(FileOperationProgress(totalCopied, totalBytes, fileName))
             }

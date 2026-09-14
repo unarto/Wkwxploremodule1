@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import java.io.IOException
+import java.util.UUID
 
 class RootStreamTransferHelper {
 
@@ -25,10 +26,11 @@ class RootStreamTransferHelper {
             }
         }
 
+        val temporary = SuFile("${dest.absolutePath}.wkw-${UUID.randomUUID()}.tmp")
         val buffer = ByteArray(StorageConstants.Buffer.DEFAULT_I_O_BUFFER_SIZE_BYTES)
         try {
             SuFileInputStream.open(source).use { input ->
-                SuFileOutputStream.open(dest).use { output ->
+                SuFileOutputStream.open(temporary).use { output ->
                     var bytesRead: Int
                     while (input.read(buffer).also { bytesRead = it } >= 0) {
                         if (!currentCoroutineContext().isActive) {
@@ -40,17 +42,36 @@ class RootStreamTransferHelper {
                     output.flush()
                 }
             }
-            if (dest.length() != source.length()) {
-                throw IOException("Partial copy detected: destination size (${dest.length()}) does not match source size (${source.length()})")
+            if (temporary.length() != source.length()) {
+                throw IOException("Partial copy detected: temporary size (${temporary.length()}) does not match source size (${source.length()})")
             }
+            replaceSafely(temporary, dest)
         } catch (e: Throwable) {
             try {
-                if (dest.exists()) {
-                    dest.delete()
+                if (temporary.exists()) {
+                    temporary.delete()
                 }
             } catch (_: Exception) {
             }
             throw e
+        }
+    }
+
+    private fun replaceSafely(temporary: SuFile, destination: SuFile) {
+        if (!destination.exists()) {
+            if (!temporary.renameTo(destination)) throw IOException("Failed to publish root destination: ${destination.absolutePath}")
+            return
+        }
+
+        val backup = SuFile("${destination.absolutePath}.wkw-${UUID.randomUUID()}.bak")
+        if (!destination.renameTo(backup)) throw IOException("Failed to preserve existing root destination: ${destination.absolutePath}")
+        try {
+            if (!temporary.renameTo(destination)) throw IOException("Failed to publish root destination: ${destination.absolutePath}")
+            if (!backup.delete() && backup.exists()) throw IOException("Failed to remove root destination backup: ${backup.absolutePath}")
+        } catch (error: Throwable) {
+            if (destination.exists()) destination.delete()
+            backup.renameTo(destination)
+            throw error
         }
     }
 }

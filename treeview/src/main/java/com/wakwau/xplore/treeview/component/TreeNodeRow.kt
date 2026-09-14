@@ -1,5 +1,5 @@
 // [Jalur Class/Modul]: treeview/src/main/java/com/wakwau/xplore/treeview/component/TreeNodeRow.kt
-// [Penjelasan]: Komponen UI composable untuk me-render satu baris node dalam hierarki pohon berkas beserta garis panduan cabang dan indentasi terstruktur.
+// [Penjelasan]: Komponen UI composable untuk me-render satu baris node dalam hierarki generik beserta garis panduan cabang dan indentasi terstruktur.
 package com.wakwau.xplore.treeview.component
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -50,7 +50,7 @@ fun <T> TreeNodeRow(
     content: @Composable (node: TreeNode<T>) -> Unit
 ) {
     val node = flattenedNode.node
-    val isPlaceholder = flattenedNode.isEmptyPlaceholder || node.isPlaceholder
+    val isPlaceholder = node.isPlaceholder
     val rowBg = Color.Transparent
 
     Row(

@@ -5,6 +5,6 @@ package com.wakwau.xplore.core.storage.operation
 import kotlinx.coroutines.flow.Flow
 
 interface FileOperationProgressDispatcher {
-    val progressFlow: Flow<FileOperationResult<FileOperationProgress>>
-    suspend fun emitProgress(result: FileOperationResult<FileOperationProgress>)
+    val progressFlow: Flow<BackgroundOperationEvent>
+    suspend fun emitProgress(event: BackgroundOperationEvent)
 }

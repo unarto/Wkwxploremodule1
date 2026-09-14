@@ -30,6 +30,11 @@ interface FileIndexRepository {
 
     suspend fun replacePrefixIndex(locationPrefix: String, items: List<FileIndexItem>)
 
+    suspend fun replacePrefixIndexBatched(
+        locationPrefix: String,
+        batches: Flow<List<FileIndexItem>>
+    )
+
     suspend fun syncRename(oldPath: String, newItem: FileIndexItem)
 
     suspend fun syncMove(sourcePath: String, destinationItem: FileIndexItem)

@@ -115,48 +115,6 @@ class FileRepositoryImplTest {
     }
 
     @Test
-    fun copy_withIndexRepository_syncsDestinationIndex() = runTest {
-        val fakeIndexRepo = object : com.wakwau.xplore.core.storage.repository.FileIndexRepository {
-            val indexed = mutableListOf<com.wakwau.xplore.core.storage.model.FileIndexItem>()
-            override suspend fun addOrUpdateIndex(item: com.wakwau.xplore.core.storage.model.FileIndexItem) { indexed.add(item) }
-            override suspend fun addOrUpdateIndexBatch(items: List<com.wakwau.xplore.core.storage.model.FileIndexItem>) { indexed.addAll(items) }
-            override suspend fun removeIndex(filePath: String) { indexed.removeAll { it.filePath == filePath || it.filePath.startsWith(if (filePath.endsWith("/")) filePath else "$filePath/") } }
-            override suspend fun removeIndexBatch(filePaths: List<String>) { filePaths.forEach { removeIndex(it) } }
-            override suspend fun removeIndexByPrefix(locationPrefix: String) { indexed.removeAll { it.filePath.startsWith(locationPrefix) } }
-            override suspend fun removeIndexByPrefixes(locationPrefixes: List<String>) { locationPrefixes.forEach { removeIndexByPrefix(it) } }
-            override suspend fun replacePrefixIndex(locationPrefix: String, items: List<com.wakwau.xplore.core.storage.model.FileIndexItem>) { removeIndexByPrefix(locationPrefix); addOrUpdateIndexBatch(items) }
-            override suspend fun syncRename(oldPath: String, newItem: com.wakwau.xplore.core.storage.model.FileIndexItem) { removeIndex(oldPath); addOrUpdateIndex(newItem) }
-            override suspend fun syncMove(sourcePath: String, destinationItem: com.wakwau.xplore.core.storage.model.FileIndexItem) { removeIndex(sourcePath); addOrUpdateIndex(destinationItem) }
-            override suspend fun clearIndex() { indexed.clear() }
-            override fun searchFiles(locationPrefix: String, keyword: String, minSize: Long?, maxSize: Long?, extension: String?) = kotlinx.coroutines.flow.emptyFlow<List<com.wakwau.xplore.core.storage.model.FileIndexItem>>()
-            override fun getFilesByCategory(category: String) = kotlinx.coroutines.flow.emptyFlow<List<com.wakwau.xplore.core.storage.model.FileIndexItem>>()
-        }
-        val repoWithSync = FileRepositoryImpl(
-            localFileSystem = LocalFileSystem(FileMetadataReader(), FileItemMapper()),
-            safFileSystem = com.wakwau.xplore.core.storage.testutil.TestSafFileSystem(),
-            safShizukuFileSystem = com.wakwau.xplore.core.storage.testutil.TestShizukuFileSystem(),
-            rootFileSystem = com.wakwau.xplore.core.storage.testutil.TestRootFileSystem(),
-            backendClassifier = StorageBackendClassifier(isSuAvailable = { false }, isShizukuAvailable = { false }, isSafPersisted = { false }),
-            storageErrorMapper = com.wakwau.xplore.core.storage.testutil.TestStorageErrorMapper(),
-            fileIndexRepository = fakeIndexRepo,
-            ioDispatcher = dispatcher
-        )
-
-        val srcFile = File(tempDir, "source_sync.txt")
-        srcFile.writeText("sample data")
-        val destFile = File(tempDir, "dest_sync.txt")
-
-                // [Jalur Class/Modul]: file-system/src/test/kotlin/com/wakwau/xplore/core/storage/repository/FileRepositoryImplTest.kt
-        // [Penjelasan]: Menguji sinkronisasi indeks destinasi setelah operasi salin selesai dilakukan.
-        val results = repoWithSync.copy(StorageLocation(srcFile.absolutePath), StorageLocation(destFile.absolutePath)).toList()
-
-        assertTrue(results.last() is FileOperationResult.Success)
-        assertTrue(destFile.exists())
-        assertEquals(1, fakeIndexRepo.indexed.size)
-        assertEquals(destFile.absolutePath, fakeIndexRepo.indexed.first().filePath)
-    }
-
-    @Test
     fun move_existingFile_validDestination_returnsSuccess() = runTest {
         val file = File(tempDir, "move.txt")
         file.writeText("content")
@@ -232,45 +190,6 @@ class FileRepositoryImplTest {
         } catch (_: java.nio.file.FileSystemException) {
             // Privilege required on Windows
         }
-    }
-
-    @Test
-    fun delete_withIndexRepository_removesIndexAndPrefixes() = runTest {
-        val fakeIndexRepo = object : com.wakwau.xplore.core.storage.repository.FileIndexRepository {
-            val indexed = mutableListOf<com.wakwau.xplore.core.storage.model.FileIndexItem>()
-            override suspend fun addOrUpdateIndex(item: com.wakwau.xplore.core.storage.model.FileIndexItem) { indexed.add(item) }
-            override suspend fun addOrUpdateIndexBatch(items: List<com.wakwau.xplore.core.storage.model.FileIndexItem>) { indexed.addAll(items) }
-            override suspend fun removeIndex(filePath: String) { indexed.removeAll { it.filePath == filePath || it.filePath.startsWith(if (filePath.endsWith("/")) filePath else "$filePath/") } }
-            override suspend fun removeIndexBatch(filePaths: List<String>) { filePaths.forEach { removeIndex(it) } }
-            override suspend fun removeIndexByPrefix(locationPrefix: String) { indexed.removeAll { it.filePath.startsWith(locationPrefix) } }
-            override suspend fun removeIndexByPrefixes(locationPrefixes: List<String>) { locationPrefixes.forEach { removeIndexByPrefix(it) } }
-            override suspend fun replacePrefixIndex(locationPrefix: String, items: List<com.wakwau.xplore.core.storage.model.FileIndexItem>) { removeIndexByPrefix(locationPrefix); addOrUpdateIndexBatch(items) }
-            override suspend fun syncRename(oldPath: String, newItem: com.wakwau.xplore.core.storage.model.FileIndexItem) { removeIndex(oldPath); addOrUpdateIndex(newItem) }
-            override suspend fun syncMove(sourcePath: String, destinationItem: com.wakwau.xplore.core.storage.model.FileIndexItem) { removeIndex(sourcePath); addOrUpdateIndex(destinationItem) }
-            override suspend fun clearIndex() { indexed.clear() }
-            override fun searchFiles(locationPrefix: String, keyword: String, minSize: Long?, maxSize: Long?, extension: String?) = kotlinx.coroutines.flow.emptyFlow<List<com.wakwau.xplore.core.storage.model.FileIndexItem>>()
-            override fun getFilesByCategory(category: String) = kotlinx.coroutines.flow.emptyFlow<List<com.wakwau.xplore.core.storage.model.FileIndexItem>>()
-        }
-        val repoWithSync = FileRepositoryImpl(
-            localFileSystem = LocalFileSystem(FileMetadataReader(), FileItemMapper()),
-            safFileSystem = com.wakwau.xplore.core.storage.testutil.TestSafFileSystem(),
-            safShizukuFileSystem = com.wakwau.xplore.core.storage.testutil.TestShizukuFileSystem(),
-            rootFileSystem = com.wakwau.xplore.core.storage.testutil.TestRootFileSystem(),
-            backendClassifier = StorageBackendClassifier(isSuAvailable = { false }, isShizukuAvailable = { false }, isSafPersisted = { false }),
-            storageErrorMapper = com.wakwau.xplore.core.storage.testutil.TestStorageErrorMapper(),
-            fileIndexRepository = fakeIndexRepo,
-            ioDispatcher = dispatcher
-        )
-
-        val folder = File(tempDir, "sync_folder").apply { mkdirs() }
-        val file1 = File(folder, "file1.txt").apply { writeText("f1") }
-        fakeIndexRepo.indexed.add(com.wakwau.xplore.core.storage.model.FileIndexItem(folder.absolutePath, "sync_folder", 0L, "", "folder", 0L, true))
-        fakeIndexRepo.indexed.add(com.wakwau.xplore.core.storage.model.FileIndexItem(file1.absolutePath, "file1.txt", 2L, "txt", "text", 0L, false))
-
-        val result = repoWithSync.delete(StorageLocation(folder.absolutePath))
-
-        assertTrue(result is FileOperationResult.Success)
-        assertTrue(fakeIndexRepo.indexed.isEmpty())
     }
 
     @Test

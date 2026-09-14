@@ -2,7 +2,6 @@
 // [Penjelasan]: Penyesuaian lokasi modul dan implementasi kontrak API
 package com.wakwau.xplore.core.storage.repository
 
-import com.wakwau.xplore.core.storage.mapper.toIndexItem
 import com.wakwau.xplore.core.storage.api.error.StorageErrorMapper
 import com.wakwau.xplore.core.storage.filesystem.LocalFileSystemContract
 import com.wakwau.xplore.core.storage.filesystem.RootFileSystemContract
@@ -15,12 +14,15 @@ import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.storage.model.StorageLocation
 import com.wakwau.xplore.core.storage.operation.FileOperationProgress
 import com.wakwau.xplore.core.storage.operation.FileOperationResult
-import com.wakwau.xplore.core.storage.repository.FileIndexRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 class FileRepositoryImpl(
@@ -31,7 +33,6 @@ class FileRepositoryImpl(
     private val crossFilesystemTransferBridge: CrossFilesystemTransferBridge? = null,
     private val backendClassifier: StorageBackendClassifier,
     private val storageErrorMapper: StorageErrorMapper,
-    private val fileIndexRepository: FileIndexRepository? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : FileRepository {
 
@@ -45,7 +46,6 @@ class FileRepositoryImpl(
                 StorageBackendType.SAF -> safFileSystem.createDirectory(location, name)
                 StorageBackendType.LOCAL -> localFileSystem.createDirectory(location, name)
             }
-            fileIndexRepository?.addOrUpdateIndex(fileItem.toIndexItem())
             FileOperationResult.Success(fileItem)
         } catch (e: CancellationException) {
             throw e
@@ -62,7 +62,6 @@ class FileRepositoryImpl(
                 StorageBackendType.SHIZUKU -> safShizukuFileSystem.delete(location)
                 StorageBackendType.LOCAL -> localFileSystem.delete(location)
             }
-            fileIndexRepository?.removeIndex(location.path)
             FileOperationResult.Success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -79,7 +78,6 @@ class FileRepositoryImpl(
                 StorageBackendType.SHIZUKU -> safShizukuFileSystem.rename(location, newName)
                 StorageBackendType.LOCAL -> localFileSystem.rename(location, newName)
             }
-            fileIndexRepository?.syncRename(location.path, fileItem.toIndexItem())
             FileOperationResult.Success(fileItem)
         } catch (e: CancellationException) {
             throw e
@@ -88,8 +86,8 @@ class FileRepositoryImpl(
         }
     }
 
-    override fun copy(source: StorageLocation, destination: StorageLocation): Flow<FileOperationResult<FileOperationProgress>> = flow {
-        try {
+    override fun copy(source: StorageLocation, destination: StorageLocation): Flow<FileOperationResult<FileOperationProgress>> =
+        flow {
             val sourceType = backendClassifier.classify(source)
             val destType = backendClassifier.classify(destination)
 
@@ -105,19 +103,21 @@ class FileRepositoryImpl(
                 bridge.copyCross(source, destination, sourceType, destType)
             }
 
-            progressFlow.collect { progress ->
-                emit(FileOperationResult.Success(progress))
-            }
-            syncDestinationIndex(destination)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            emit(FileOperationResult.Failure(storageErrorMapper.map(e)))
+            emitAll(progressFlow.map<FileOperationProgress, FileOperationResult<FileOperationProgress>> { progress ->
+                FileOperationResult.Success(progress)
+            })
         }
-    }
+            .catch { error ->
+                when (error) {
+                    is CancellationException -> throw error
+                    is Exception -> emit(FileOperationResult.Failure(storageErrorMapper.map(error)))
+                    else -> throw error
+                }
+            }
+            .flowOn(ioDispatcher)
 
-    override fun move(source: StorageLocation, destination: StorageLocation): Flow<FileOperationResult<FileOperationProgress>> = flow {
-        try {
+    override fun move(source: StorageLocation, destination: StorageLocation): Flow<FileOperationResult<FileOperationProgress>> =
+        flow {
             val sourceType = backendClassifier.classify(source)
             val destType = backendClassifier.classify(destination)
 
@@ -133,35 +133,17 @@ class FileRepositoryImpl(
                 bridge.moveCross(source, destination, sourceType, destType)
             }
 
-            progressFlow.collect { progress ->
-                emit(FileOperationResult.Success(progress))
-            }
-            val destItem = getDestinationFileItem(destination)
-            if (destItem != null) {
-                fileIndexRepository?.syncMove(source.path, destItem.toIndexItem())
-            } else {
-                fileIndexRepository?.removeIndex(source.path)
-                fileIndexRepository?.removeIndexByPrefix(source.path)
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            emit(FileOperationResult.Failure(storageErrorMapper.map(e)))
+            emitAll(progressFlow.map<FileOperationProgress, FileOperationResult<FileOperationProgress>> { progress ->
+                FileOperationResult.Success(progress)
+            })
         }
-    }
+            .catch { error ->
+                when (error) {
+                    is CancellationException -> throw error
+                    is Exception -> emit(FileOperationResult.Failure(storageErrorMapper.map(error)))
+                    else -> throw error
+                }
+            }
+            .flowOn(ioDispatcher)
 
-    private suspend fun syncDestinationIndex(destination: StorageLocation) {
-        getDestinationFileItem(destination)?.let { fileItem ->
-            fileIndexRepository?.addOrUpdateIndex(fileItem.toIndexItem())
-        }
-    }
-
-    private suspend fun getDestinationFileItem(destination: StorageLocation): FileItem? = when (backendClassifier.classify(destination)) {
-        StorageBackendType.ROOT -> rootFileSystem.getFileItem(destination)
-        StorageBackendType.SAF -> safFileSystem.getFileItem(destination)
-        StorageBackendType.SHIZUKU -> safShizukuFileSystem.getFileItem(destination)
-        StorageBackendType.LOCAL -> localFileSystem.getFileItem(destination)
-    }
 }
-
-

@@ -1,4 +1,4 @@
-// [Jalur Class/Modul]: core-storage/src/test/kotlin/com/wakwau/xplore/core/storage/error/StorageErrorMapperImplTest.kt
+// [Jalur Class/Modul]: file-system/src/test/kotlin/com/wakwau/xplore/core/storage/error/StorageErrorMapperImplTest.kt
 // [Penjelasan]: Unit test untuk StorageErrorMapperImpl yang memvalidasi pemetaan exception IO, Security, dan IllegalArgument.
 package com.wakwau.xplore.core.storage.error
 

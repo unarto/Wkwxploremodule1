@@ -118,6 +118,7 @@ class DualPaneStateHolderTest {
     private val fakeVolumeRepository = object : StorageVolumeRepository {
         override fun getVolumes(): Flow<List<StorageVolumeItem>> = emptyFlow()
         override suspend fun refreshVolumes() {}
+        override fun close() {}
     }
 
     private val fakeSafHandler = object : SafPermissionHandler {

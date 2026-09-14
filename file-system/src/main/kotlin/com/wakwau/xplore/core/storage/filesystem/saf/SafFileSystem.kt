@@ -2,7 +2,6 @@
 // [Penjelasan]: Implementasi fasad sistem berkas Storage Access Framework (SAF) yang mendelegasikan resolusi DocumentFile ke SafUriResolver dan transfer I/O ke SafStreamTransferHelper (< 250 LOC).
 package com.wakwau.xplore.core.storage.filesystem.saf
 
-import kotlinx.coroutines.CancellationException
 import android.content.Context
 import android.net.Uri
 import com.wakwau.xplore.core.storage.constant.StorageConstants
@@ -14,10 +13,10 @@ import com.wakwau.xplore.core.storage.model.StorageLocation
 import com.wakwau.xplore.core.storage.operation.FileOperationProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
 import java.io.FileNotFoundException
 import java.io.IOException
 
@@ -26,6 +25,7 @@ class SafFileSystem(
     private val uriResolver: SafUriResolver = SafUriResolver(context),
     private val streamTransferHelper: SafStreamTransferHelper = SafStreamTransferHelper(context)
 ) : SafFileSystemContract {
+    private val moveTargetValidator = SafMoveTargetValidator()
 
     override suspend fun listFiles(location: StorageLocation, showHidden: Boolean): List<FileItem> {
         val uri = Uri.parse(location.path)
@@ -37,7 +37,13 @@ class SafFileSystem(
             throw FileNotFoundException("Directory not found or is not a directory: ${location.path}")
         }
 
-        val files = documentFile.listFiles() ?: emptyArray()
+        val files = try {
+            documentFile.listFiles()
+        } catch (error: SecurityException) {
+            throw error
+        } catch (error: Exception) {
+            throw IOException("Failed to list SAF directory: ${location.path}", error)
+        }
 
         return files.filter { file ->
             if (!showHidden) file.name?.startsWith(".") != true else true
@@ -179,7 +185,7 @@ class SafFileSystem(
         }
 
         if (isSourceDir) {
-            streamTransferHelper.copyDirectoryRecursively(sourceDoc, destDoc, targetName, totalBytes) { incrementalBytes, fileName ->
+            streamTransferHelper.copyDirectoryTransactionally(sourceDoc, destDoc, targetName, totalBytes) { incrementalBytes, fileName ->
                 totalCopied += incrementalBytes
                 emit(FileOperationProgress(totalCopied, totalBytes, fileName))
             }
@@ -196,24 +202,35 @@ class SafFileSystem(
             ?: throw FileNotFoundException("Source not found: ${source.path}")
         val sourceSize = if (sourceDoc.isFile) sourceDoc.length() else 0L
         val isSourceDir = sourceDoc.isDirectory
+        val targetName = Uri.parse(destination.path).fragment
+            ?: sourceDoc.name
+            ?: StorageConstants.DEFAULT_UNKNOWN_FILE_NAME
         val cleanDestPath = destination.path.substringBefore("#")
 
         copy(source, destination).collect { progress ->
             emit(progress)
         }
 
-        if (currentCoroutineContext().isActive) {
-            val destDoc = uriResolver.resolveDocumentFile(Uri.parse(cleanDestPath))
-            if (destDoc == null || !destDoc.exists()) {
-                throw IOException("Move failed: destination does not exist after copy ($cleanDestPath)")
-            }
-            if (!isSourceDir && destDoc.isFile && destDoc.length() != sourceSize) {
-                try { destDoc.delete() } catch (e: Exception) {
-            if (e is CancellationException) throw e; android.util.Log.w("FileSystem", "Failed to clean partial file", e) }
-                throw IOException("Move failed: partial copy detected (destination size mismatch)")
-            }
-            delete(source)
+        currentCoroutineContext().ensureActive()
+        val destinationDocument = uriResolver.resolveTreeDocumentFile(Uri.parse(cleanDestPath))
+            ?: uriResolver.resolveDocumentFile(Uri.parse(cleanDestPath))
+            ?: throw FileNotFoundException("Move failed: SAF destination cannot be resolved ($cleanDestPath)")
+        val targetDocument = if (destinationDocument.isDirectory) {
+            destinationDocument.findFile(targetName)
+        } else {
+            destinationDocument
         }
+        val targetState = targetDocument?.let {
+            SafMoveTargetState(
+                exists = it.exists(),
+                isFile = it.isFile,
+                isDirectory = it.isDirectory,
+                size = if (it.isFile) it.length() else 0L
+            )
+        }
+        moveTargetValidator.validate(isSourceDir, sourceSize, targetState)
+        currentCoroutineContext().ensureActive()
+        delete(source)
     }.flowOn(Dispatchers.IO)
 
     override suspend fun getFileItem(location: StorageLocation): FileItem? {

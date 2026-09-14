@@ -4,7 +4,6 @@
 <resources>
     <string name="title_search_temukan">Temukan</string>
     <string name="label_temukan">Temukan</string>
-    <string name="label_cari_di_arsip">Cari di arsip</string>
     <string name="filter_target_all">semua</string>
     <string name="filter_target_file">file</string>
     <string name="filter_target_folder">folder</string>

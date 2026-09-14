@@ -1,4 +1,4 @@
-// [Jalur Class/Modul]: core-storage/src/main/kotlin/com/wakwau/xplore/core/storage/error/StorageErrorMapperImpl.kt
+// [Jalur Class/Modul]: file-system/src/main/kotlin/com/wakwau/xplore/core/storage/error/StorageErrorMapperImpl.kt
 // [Penjelasan]: Implementasi konkret StorageErrorMapper untuk memetakan exception Throwable (I/O, Security, FileNotFound, IllegalArgument) ke FileOperationError standar.
 
 package com.wakwau.xplore.core.storage.error

@@ -11,12 +11,15 @@ import com.wakwau.xplore.core.storage.constant.StorageConstants
 class StorageVolumeBroadcastReceiver(
     private val onVolumeChanged: () -> Unit
 ) : BroadcastReceiver() {
+    private var registeredContext: Context? = null
 
     override fun onReceive(context: Context?, intent: Intent?) {
         onVolumeChanged()
     }
 
+    @Synchronized
     fun register(context: Context) {
+        if (registeredContext != null) return
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_MEDIA_MOUNTED)
             addAction(Intent.ACTION_MEDIA_UNMOUNTED)
@@ -26,13 +29,13 @@ class StorageVolumeBroadcastReceiver(
             addDataScheme(StorageConstants.FILE_SCHEME)
         }
         context.registerReceiver(this, filter)
+        registeredContext = context
     }
 
-    fun unregister(context: Context) {
-        try {
-            context.unregisterReceiver(this)
-        } catch (e: IllegalArgumentException) {
-            // Receiver not registered
-        }
+    @Synchronized
+    fun unregister() {
+        val context = registeredContext ?: return
+        context.unregisterReceiver(this)
+        registeredContext = null
     }
 }

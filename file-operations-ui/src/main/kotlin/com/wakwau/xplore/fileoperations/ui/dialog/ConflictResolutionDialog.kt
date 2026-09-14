@@ -48,8 +48,6 @@ fun ConflictResolutionDialog(
 
     AppDialog(
         title = dialogTitle,
-        confirmButtonText = "",
-        onConfirm = {},
         onDismissRequest = onDismiss
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {

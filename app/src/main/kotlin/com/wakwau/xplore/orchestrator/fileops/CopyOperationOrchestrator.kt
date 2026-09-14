@@ -15,6 +15,7 @@ import com.wakwau.xplore.fileoperations.conflict.DetectConflictsUseCase
 import com.wakwau.xplore.fileoperations.conflict.FileConflict
 import com.wakwau.xplore.fileoperations.conflict.ResolveTransferUseCase
 import com.wakwau.xplore.fileoperations.copy.CopyFilesUseCase
+import com.wakwau.xplore.fileoperations.conflict.ResolvedTransferItem
 import kotlinx.coroutines.CancellationException
 
 class CopyOperationOrchestrator(
@@ -23,6 +24,7 @@ class CopyOperationOrchestrator(
     private val resolveTransferUseCase: ResolveTransferUseCase,
     private val storageErrorMapper: StorageErrorMapper,
     private val dispatch: (DualPaneEvent) -> Unit,
+    private val onEnqueued: (String, List<ResolvedTransferItem>) -> Unit = { _, _ -> },
     private val onShowConflict: ((isMove: Boolean, conflicts: List<FileConflict>, destinationDir: StorageLocation, allSources: List<StorageLocation>) -> Unit)? = null
 ) {
     suspend fun execute(
@@ -53,7 +55,8 @@ class CopyOperationOrchestrator(
             )
 
             dispatch(DualPaneEvent.OperationStarted(FileOperationConstants.OPERATION_COPY))
-            copyFilesUseCase.invoke(resolved)
+            val operationId = copyFilesUseCase.invoke(resolved)
+            onEnqueued(operationId, resolved)
 
         } catch (e: CancellationException) {
             dispatch(DualPaneEvent.OperationCancelled)
@@ -77,7 +80,8 @@ class CopyOperationOrchestrator(
             )
 
             dispatch(DualPaneEvent.OperationStarted(FileOperationConstants.OPERATION_COPY))
-            copyFilesUseCase.invoke(resolved)
+            val operationId = copyFilesUseCase.invoke(resolved)
+            onEnqueued(operationId, resolved)
 
         } catch (e: CancellationException) {
             dispatch(DualPaneEvent.OperationCancelled)
@@ -88,4 +92,3 @@ class CopyOperationOrchestrator(
         }
     }
 }
-

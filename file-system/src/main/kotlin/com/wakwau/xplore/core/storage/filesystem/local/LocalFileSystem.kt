@@ -72,7 +72,8 @@ class LocalFileSystem(
             throw FileNotFoundException("Directory not found or is not a directory: $path")
         }
 
-        var files = directory.listFiles()?.toList() ?: emptyList()
+        var files = directory.listFiles()?.toList()
+            ?: throw IOException("Failed to list directory: $path")
 
         if (!showHidden) {
             files = files.filter { !it.isHidden && !it.name.startsWith(".") }
@@ -172,7 +173,7 @@ class LocalFileSystem(
         val totalBytes = if (sourceFile.isDirectory) directoryOperationHelper.calculateTotalSize(sourceFile) else sourceFile.length()
 
         if (sourceFile.isDirectory) {
-            directoryOperationHelper.copyDirectoryRecursively(sourceFile, destFile, totalBytes) { incrementalBytes, fileName ->
+            directoryOperationHelper.copyDirectoryTransactionally(sourceFile, destFile, totalBytes) { incrementalBytes, fileName ->
                 totalCopied += incrementalBytes
                 emit(FileOperationProgress(totalCopied, totalBytes, fileName))
             }

@@ -10,6 +10,10 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.UUID
 
 class LocalStreamTransferHelper {
 
@@ -19,12 +23,13 @@ class LocalStreamTransferHelper {
         totalBytes: Long,
         onProgress: suspend (Long, String) -> Unit
     ) {
+        dest.parentFile?.let { parent ->
+            if (!parent.exists() && !parent.mkdirs()) throw IOException("Failed to create destination parent: ${parent.absolutePath}")
+        }
+        val temporary = File(dest.parentFile, ".${dest.name}.wkw-${UUID.randomUUID()}.tmp")
         try {
-            val src = source.absolutePath
-            val destPath = dest.absolutePath
-            // [Jalur Class/Modul]: file-system/src/main/kotlin/com/wakwau/xplore/core/storage/filesystem/local/LocalStreamTransferHelper.kt
             FileInputStream(source).use { input ->
-                FileOutputStream(dest).use { output ->
+                FileOutputStream(temporary).use { output ->
                     val inputChannel = input.channel
                     val outputChannel = output.channel
                     val size = inputChannel.size()
@@ -56,18 +61,49 @@ class LocalStreamTransferHelper {
                     output.flush()
                 }
             }
-            if (dest.length() != source.length()) {
-                throw IOException("Partial copy detected: destination size (${dest.length()}) does not match source size (${source.length()})")
+            if (temporary.length() != source.length()) {
+                throw IOException("Partial copy detected: temporary size (${temporary.length()}) does not match source size (${source.length()})")
             }
+            replaceAtomically(temporary, dest)
         } catch (e: Throwable) {
             try {
-                if (dest.exists()) {
-                    dest.delete()
+                if (temporary.exists()) {
+                    temporary.delete()
                 }
             } catch (ex: Exception) {
                 android.util.Log.w("FileSystem", "Failed to clean partial file", ex)
             }
             throw e
+        }
+    }
+
+    private fun replaceAtomically(temporary: File, destination: File) {
+        try {
+            Files.move(
+                temporary.toPath(),
+                destination.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            replaceWithBackup(temporary, destination)
+        }
+    }
+
+    private fun replaceWithBackup(temporary: File, destination: File) {
+        if (!destination.exists()) {
+            Files.move(temporary.toPath(), destination.toPath())
+            return
+        }
+        val backup = File(destination.parentFile, ".${destination.name}.wkw-${UUID.randomUUID()}.bak")
+        Files.move(destination.toPath(), backup.toPath())
+        try {
+            Files.move(temporary.toPath(), destination.toPath())
+            Files.delete(backup.toPath())
+        } catch (error: Throwable) {
+            Files.deleteIfExists(destination.toPath())
+            Files.move(backup.toPath(), destination.toPath())
+            throw error
         }
     }
 }

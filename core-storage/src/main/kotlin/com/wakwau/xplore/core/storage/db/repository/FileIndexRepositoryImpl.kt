@@ -62,6 +62,16 @@ class FileIndexRepositoryImpl(
         fileIndexDao.replacePrefixIndex(locationPrefix, items.map { it.toEntity() })
     }
 
+    override suspend fun replacePrefixIndexBatched(
+        locationPrefix: String,
+        batches: Flow<List<FileIndexItem>>
+    ) {
+        fileIndexDao.replacePrefixIndexBatched(
+            locationPrefix,
+            batches.map { batch -> batch.map { it.toEntity() } }
+        )
+    }
+
     override suspend fun syncRename(oldPath: String, newItem: FileIndexItem) {
         fileIndexDao.syncRenameAtomic(oldPath, newItem.toEntity())
     }

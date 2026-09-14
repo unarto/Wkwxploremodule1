@@ -10,23 +10,25 @@ object ByteFormatter {
     private const val KB = 1024L
     private const val MB = 1024L * 1024L
     private const val GB = 1024L * 1024L * 1024L
-    private const val TB = 1024L * 1024L * 1024L * 1024L
-
-    private val decimalFormat = DecimalFormat("#,##0.#", DecimalFormatSymbols(Locale.US))
-    private val detailedSymbols = DecimalFormatSymbols(Locale.US).apply { groupingSeparator = '\'' }
-    private val detailedFormat = DecimalFormat("#,##0", detailedSymbols)
+    private val decimalFormat = ThreadLocal.withInitial {
+        DecimalFormat("#,##0.#", DecimalFormatSymbols(Locale.US))
+    }
+    private val detailedFormat = ThreadLocal.withInitial {
+        val symbols = DecimalFormatSymbols(Locale.US).apply { groupingSeparator = '\'' }
+        DecimalFormat("#,##0", symbols)
+    }
 
     fun format(bytes: Long): String {
         if (bytes < 0) return "0 B"
         if (bytes < KB) return "$bytes B"
         val kb = bytes / 1024.0
-        if (kb < 1024.0) return "${decimalFormat.format(kb)} KB"
+        if (kb < 1024.0) return "${decimalFormat.get().format(kb)} KB"
         val mb = kb / 1024.0
-        if (mb < 1024.0) return "${decimalFormat.format(mb)} MB"
+        if (mb < 1024.0) return "${decimalFormat.get().format(mb)} MB"
         val gb = mb / 1024.0
-        if (gb < 1024.0) return "${decimalFormat.format(gb)} GB"
+        if (gb < 1024.0) return "${decimalFormat.get().format(gb)} GB"
         val tb = gb / 1024.0
-        return "${decimalFormat.format(tb)} TB"
+        return "${decimalFormat.get().format(tb)} TB"
     }
 
     fun formatBytesShort(bytes: Long): String {
@@ -39,6 +41,6 @@ object ByteFormatter {
     fun formatDetailed(bytes: Long, byteLabel: String): String {
         if (bytes < 0) return "0 $byteLabel"
         val human = format(bytes)
-        return "$human (${detailedFormat.format(bytes)} $byteLabel)"
+        return "$human (${detailedFormat.get().format(bytes)} $byteLabel)"
     }
 }

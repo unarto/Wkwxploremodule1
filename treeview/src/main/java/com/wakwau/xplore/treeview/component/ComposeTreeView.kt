@@ -43,7 +43,7 @@ fun <T> ComposeTreeView(
             items = visibleNodes,
             key = key
         ) { index, flattenedNode ->
-            val isPlaceholder = flattenedNode.isEmptyPlaceholder || flattenedNode.node.isPlaceholder
+            val isPlaceholder = flattenedNode.node.isPlaceholder
             val borderPosition = TreeScopeCalculator.getBorderPosition(index, focusRange)
 
             TreeNodeRow(

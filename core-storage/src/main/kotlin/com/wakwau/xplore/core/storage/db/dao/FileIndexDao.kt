@@ -9,6 +9,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import com.wakwau.xplore.core.storage.db.entity.FileIndexEntity
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 
 @Dao
 interface FileIndexDao {
@@ -110,6 +111,19 @@ interface FileIndexDao {
         deleteByPrefix(prefixWithSlash)
         if (entities.isNotEmpty()) {
             insertOrUpdateBatch(entities)
+        }
+    }
+
+    @Transaction
+    suspend fun replacePrefixIndexBatched(
+        locationPrefix: String,
+        batches: Flow<List<FileIndexEntity>>
+    ) {
+        deleteByPrefix(locationPrefix)
+        val prefixWithSlash = if (locationPrefix.endsWith("/")) locationPrefix else "$locationPrefix/"
+        deleteByPrefix(prefixWithSlash)
+        batches.collect { batch ->
+            insertOrUpdateBatch(batch)
         }
     }
 

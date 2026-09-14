@@ -66,7 +66,7 @@ object MimeTypeDetector {
         return try {
             val guess = URLConnection.guessContentTypeFromName(fileName)
             guess ?: "application/octet-stream"
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             "application/octet-stream"
         }
     }

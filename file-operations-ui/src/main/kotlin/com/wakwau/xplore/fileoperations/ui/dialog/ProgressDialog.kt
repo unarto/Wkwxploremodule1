@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.wakwau.xplore.core.storage.operation.FileOperationProgress
 import com.wakwau.xplore.core.utils.ui.theme.XPloreTheme
-import com.wakwau.xplore.core.utils.ui.formatter.ByteFormatter
+import com.wakwau.xplore.core.utils.formatter.ByteFormatter
 import com.wakwau.xplore.fileoperations.ui.R
 
 @Composable

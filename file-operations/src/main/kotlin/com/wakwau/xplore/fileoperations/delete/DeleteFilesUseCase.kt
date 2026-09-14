@@ -7,11 +7,9 @@ import com.wakwau.xplore.fileoperations.client.BackgroundOperationClient
 import com.wakwau.xplore.core.storage.operation.BackgroundOperationType
 
 class DeleteFilesUseCase(private val backgroundOperationClient: BackgroundOperationClient) {
-    fun invoke(sources: List<StorageLocation>) {
+    fun invoke(sources: List<StorageLocation>): String =
         backgroundOperationClient.enqueueOperation(
             BackgroundOperationType.DELETE,
-            sources,
-            StorageLocation("", "")
+            sources
         )
-    }
 }

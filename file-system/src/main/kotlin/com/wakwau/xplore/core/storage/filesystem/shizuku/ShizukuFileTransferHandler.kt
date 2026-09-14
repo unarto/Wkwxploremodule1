@@ -6,10 +6,12 @@ import com.wakwau.xplore.core.storage.constant.StorageConstants
 import com.wakwau.xplore.core.storage.shizuku.IPrivilegedFileService
 import com.wakwau.xplore.core.storage.shizuku.ShizukuIpcConstants
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import kotlinx.coroutines.isActive
+import java.util.UUID
 
 class ShizukuFileTransferHandler {
 
@@ -20,12 +22,14 @@ class ShizukuFileTransferHandler {
         totalBytes: Long,
         onProgress: suspend (Long, String) -> Unit
     ) {
+        val temporaryPath = "$destPath.wkw-${UUID.randomUUID()}.tmp"
         val readFd = service.openFileForRead(sourcePath) 
             ?: throw IOException("Failed to open source file for reading in root: $sourcePath")
             
-        val writeFd = service.openFileForWrite(destPath)
+        val writeFd = service.openFileForWrite(temporaryPath)
             ?: run {
                 readFd.close()
+                service.delete(temporaryPath)
                 throw IOException("Failed to open destination file for writing in root: $destPath")
             }
 
@@ -50,17 +54,73 @@ class ShizukuFileTransferHandler {
             val isDir = service.isDirectory(sourcePath)
             if (!isDir) {
                 val srcLen = service.length(sourcePath)
-                val destLen = service.length(destPath)
+                val destLen = service.length(temporaryPath)
                 if (destLen != srcLen) {
                     throw IOException("Partial copy detected: destination size ($destLen) does not match source size ($srcLen)")
                 }
             }
+            replaceSafely(service, temporaryPath, destPath)
         } catch (e: Throwable) {
-            try { service.delete(destPath) } catch (e: Exception) { android.util.Log.w("FileSystem", "Failed to clean partial file", e) }
+            try { service.delete(temporaryPath) } catch (e: Exception) { android.util.Log.w("FileSystem", "Failed to clean temporary file", e) }
             throw e
         } finally {
             try { readFd.close() } catch (e: Exception) { /* ignore */ }
             try { writeFd.close() } catch (e: Exception) { /* ignore */ }
+        }
+    }
+
+    private fun replaceSafely(service: IPrivilegedFileService, temporaryPath: String, destinationPath: String) {
+        if (!service.exists(destinationPath)) {
+            if (!service.rename(temporaryPath, destinationPath)) throw IOException("Failed to publish Shizuku destination: $destinationPath")
+            return
+        }
+
+        val backupPath = "$destinationPath.wkw-${UUID.randomUUID()}.bak"
+        if (!service.rename(destinationPath, backupPath)) throw IOException("Failed to preserve existing Shizuku destination: $destinationPath")
+        try {
+            if (!service.rename(temporaryPath, destinationPath)) throw IOException("Failed to publish Shizuku destination: $destinationPath")
+            if (!service.delete(backupPath) && service.exists(backupPath)) throw IOException("Failed to remove Shizuku destination backup: $backupPath")
+        } catch (error: Throwable) {
+            if (service.exists(destinationPath)) service.delete(destinationPath)
+            service.rename(backupPath, destinationPath)
+            throw error
+        }
+    }
+
+    suspend fun copyDirectoryTransactionally(
+        service: IPrivilegedFileService,
+        sourcePath: String,
+        destinationPath: String,
+        totalBytes: Long,
+        onProgress: suspend (Long, String) -> Unit
+    ) {
+        val staging = "$destinationPath.wkw-${java.util.UUID.randomUUID()}.tmp"
+        try {
+            if (!service.createDirectory(staging)) throw IOException("Failed to create Shizuku staging directory: $staging")
+            copyDirectoryRecursively(service, sourcePath, staging, totalBytes, onProgress)
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            publishDirectory(service, staging, destinationPath)
+        } catch (error: Throwable) {
+            try { if (service.exists(staging) && !service.delete(staging)) throw IOException("Failed to remove Shizuku staging directory: $staging") }
+            catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
+        }
+    }
+
+    private fun publishDirectory(service: IPrivilegedFileService, staging: String, destination: String) {
+        if (!service.exists(destination)) {
+            if (!service.rename(staging, destination)) throw IOException("Failed to publish Shizuku directory: $destination")
+            return
+        }
+        val backup = "$destination.wkw-${java.util.UUID.randomUUID()}.bak"
+        if (!service.rename(destination, backup)) throw IOException("Failed to preserve Shizuku destination: $destination")
+        try {
+            if (!service.rename(staging, destination)) throw IOException("Failed to publish Shizuku directory: $destination")
+            if (!service.delete(backup) && service.exists(backup)) throw IOException("Failed to remove Shizuku directory backup: $backup")
+        } catch (error: Throwable) {
+            if (service.exists(destination) && !service.delete(destination)) error.addSuppressed(IOException("Failed to remove failed Shizuku publish: $destination"))
+            if (!service.rename(backup, destination)) error.addSuppressed(IOException("Failed to restore Shizuku destination: $destination"))
+            throw error
         }
     }
 
@@ -84,10 +144,12 @@ class ShizukuFileTransferHandler {
                 throw CancellationException("Copy cancelled")
             }
             
-            val childName = bundle.getString(ShizukuIpcConstants.KEY_NAME) ?: continue
+            val childName = bundle.getString(ShizukuIpcConstants.KEY_NAME)
+                ?: throw IOException("Invalid directory entry without a name: $sourcePath")
             if (childName == "." || childName == "..") continue
             
-            val childSourcePath = bundle.getString(ShizukuIpcConstants.KEY_PATH) ?: continue
+            val childSourcePath = bundle.getString(ShizukuIpcConstants.KEY_PATH)
+                ?: throw IOException("Invalid directory entry without a path: $sourcePath/$childName")
             val isDirectory = bundle.getBoolean(ShizukuIpcConstants.KEY_IS_DIRECTORY)
             
             val childDestPath = if (destPath.endsWith("/")) "$destPath$childName" else "$destPath/$childName"
@@ -112,7 +174,8 @@ class ShizukuFileTransferHandler {
             val currentPath = queue.removeFirst()
             val children = service.listDirectory(currentPath)
             for (bundle in children) {
-                val childPath = bundle.getString(ShizukuIpcConstants.KEY_PATH) ?: continue
+                val childPath = bundle.getString(ShizukuIpcConstants.KEY_PATH)
+                    ?: throw IOException("Invalid directory entry while calculating size: $currentPath")
                 val isDirectory = bundle.getBoolean(ShizukuIpcConstants.KEY_IS_DIRECTORY)
                 if (isDirectory) {
                     queue.add(childPath)

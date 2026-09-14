@@ -11,6 +11,9 @@ import com.wakwau.xplore.core.storage.model.FileType
 import com.wakwau.xplore.core.storage.model.StorageLocation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -42,7 +45,8 @@ class RootDirectoryListingHelper(
             throw FileNotFoundException("Directory not found or is not a directory in root: ${location.path}")
         }
 
-        val rawFiles = suDirectory.listFiles() ?: emptyArray()
+        val rawFiles = suDirectory.listFiles()
+            ?: throw IOException("Failed to list root directory: ${location.path}")
         val filtered = if (!showHidden) {
             rawFiles.filter { !it.isHidden && !it.name.startsWith(".") }
         } else {
@@ -138,6 +142,43 @@ class RootDirectoryListingHelper(
         }
     }
 
+    suspend fun copyDirectoryTransactionally(
+        sourceDir: SuFile,
+        destDir: SuFile,
+        totalBytes: Long,
+        onProgress: suspend (Long, String) -> Unit
+    ) {
+        val parent = destDir.parentFile ?: throw IOException("Destination has no parent: ${destDir.absolutePath}")
+        if (!parent.exists() && !parent.mkdirs()) throw IOException("Failed to create root destination parent: ${parent.absolutePath}")
+        val staging = SuFile(parent, ".${destDir.name}.wkw-${java.util.UUID.randomUUID()}.tmp")
+        try {
+            if (!staging.mkdir()) throw IOException("Failed to create root staging directory: ${staging.absolutePath}")
+            copyDirectoryRecursively(sourceDir, staging, totalBytes, onProgress)
+            currentCoroutineContext().ensureActive()
+            publishDirectory(staging, destDir)
+        } catch (error: Throwable) {
+            try { withContext(NonCancellable) { if (staging.exists()) deleteDirectoryRecursively(staging) } } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
+        }
+    }
+
+    private suspend fun publishDirectory(staging: SuFile, destination: SuFile) {
+        if (!destination.exists()) {
+            if (!staging.renameTo(destination)) throw IOException("Failed to publish root directory: ${destination.absolutePath}")
+            return
+        }
+        val backup = SuFile(destination.parentFile, ".${destination.name}.wkw-${java.util.UUID.randomUUID()}.bak")
+        if (!destination.renameTo(backup)) throw IOException("Failed to preserve root destination: ${destination.absolutePath}")
+        try {
+            if (!staging.renameTo(destination)) throw IOException("Failed to publish root directory: ${destination.absolutePath}")
+            deleteDirectoryRecursively(backup)
+        } catch (error: Throwable) {
+            if (destination.exists()) try { deleteDirectoryRecursively(destination) } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            if (!backup.renameTo(destination)) error.addSuppressed(IOException("Failed to restore root destination: ${destination.absolutePath}"))
+            throw error
+        }
+    }
+
     suspend fun copyDirectoryRecursively(
         sourceDir: SuFile,
         destDir: SuFile,
@@ -147,7 +188,8 @@ class RootDirectoryListingHelper(
         if (!destDir.exists()) {
             destDir.mkdirs()
         }
-        val children = sourceDir.listFiles() ?: return
+        val children = sourceDir.listFiles()
+            ?: throw IOException("Failed to list root source directory: ${sourceDir.absolutePath}")
         for (child in children) {
             if (!currentCoroutineContext().isActive) {
                 throw CancellationException("Root copy operation cancelled")
@@ -167,7 +209,8 @@ class RootDirectoryListingHelper(
         queue.add(dir)
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
-            val children = current.listFiles() ?: continue
+            val children = current.listFiles()
+                ?: throw IOException("Failed to list root source directory while calculating size: ${current.absolutePath}")
             for (child in children) {
                 if (child.isDirectory) {
                     queue.add(child)

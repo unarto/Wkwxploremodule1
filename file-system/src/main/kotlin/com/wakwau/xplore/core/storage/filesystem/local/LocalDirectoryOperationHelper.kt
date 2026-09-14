@@ -4,6 +4,7 @@ package com.wakwau.xplore.core.storage.filesystem.local
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import java.io.File
 import java.io.FileNotFoundException
@@ -12,7 +13,8 @@ import com.wakwau.xplore.core.storage.permission.StoragePermissionChecker
 
 class LocalDirectoryOperationHelper(
     private val streamTransferHelper: LocalStreamTransferHelper = LocalStreamTransferHelper(),
-    private val storagePermissionChecker: StoragePermissionChecker? = null
+    private val storagePermissionChecker: StoragePermissionChecker? = null,
+    private val directoryEntries: (File) -> Array<File>? = { it.listFiles() }
 ) {
 
     fun createDirectory(
@@ -129,6 +131,45 @@ class LocalDirectoryOperationHelper(
         }
     }
 
+    suspend fun copyDirectoryTransactionally(
+        sourceDir: File,
+        destDir: File,
+        totalBytes: Long,
+        onProgress: suspend (Long, String) -> Unit
+    ) {
+        val parent = destDir.parentFile ?: throw IOException("Destination has no parent: ${destDir.absolutePath}")
+        if (!parent.exists() && !parent.mkdirs()) throw IOException("Failed to create destination parent: ${parent.absolutePath}")
+        val staging = File(parent, ".${destDir.name}.wkw-${java.util.UUID.randomUUID()}.tmp")
+        try {
+            if (!staging.mkdir()) throw IOException("Failed to create staging directory: ${staging.absolutePath}")
+            copyDirectoryRecursively(sourceDir, staging, totalBytes, onProgress)
+            currentCoroutineContext().ensureActive()
+            publishDirectory(staging, destDir)
+        } catch (error: Throwable) {
+            try { if (staging.exists()) staging.deleteRecursively() } catch (cleanup: Throwable) {
+                error.addSuppressed(cleanup)
+            }
+            throw error
+        }
+    }
+
+    private fun publishDirectory(staging: File, destination: File) {
+        if (!destination.exists()) {
+            if (!staging.renameTo(destination)) throw IOException("Failed to publish directory: ${destination.absolutePath}")
+            return
+        }
+        val backup = File(destination.parentFile, ".${destination.name}.wkw-${java.util.UUID.randomUUID()}.bak")
+        if (!destination.renameTo(backup)) throw IOException("Failed to preserve destination: ${destination.absolutePath}")
+        try {
+            if (!staging.renameTo(destination)) throw IOException("Failed to publish directory: ${destination.absolutePath}")
+            if (!backup.deleteRecursively() && backup.exists()) throw IOException("Failed to remove directory backup: ${backup.absolutePath}")
+        } catch (error: Throwable) {
+            if (destination.exists()) destination.deleteRecursively()
+            if (!backup.renameTo(destination)) error.addSuppressed(IOException("Failed to restore destination: ${destination.absolutePath}"))
+            throw error
+        }
+    }
+
     suspend fun copyDirectoryRecursively(
         sourceDir: File,
         destDir: File,
@@ -139,7 +180,8 @@ class LocalDirectoryOperationHelper(
             destDir.mkdirs()
         }
         val destDirCanonical = destDir.canonicalPath
-        val files = sourceDir.listFiles() ?: return
+        val files = directoryEntries(sourceDir)
+            ?: throw IOException("Failed to list source directory: ${sourceDir.absolutePath}")
         for (file in files) {
             if (!currentCoroutineContext().isActive) {
                 throw CancellationException("Copy cancelled")
@@ -163,7 +205,8 @@ class LocalDirectoryOperationHelper(
         queue.add(dir)
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
-            val files = current.listFiles() ?: continue
+            val files = directoryEntries(current)
+                ?: throw IOException("Failed to list source directory while calculating size: ${current.absolutePath}")
             for (file in files) {
                 if (file.isDirectory) {
                     queue.add(file)

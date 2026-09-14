@@ -20,6 +20,8 @@ import com.wakwau.xplore.core.storage.shizuku.ShizukuIpcConstants
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 class CrossFilesystemDirectoryTransferHelper(
     private val context: Context,
@@ -28,6 +30,81 @@ class CrossFilesystemDirectoryTransferHelper(
     private val safShizukuFileSystem: ShizukuFileSystemContract,
     private val rootFileSystem: RootFileSystemContract
 ) {
+    private val manifestValidator = DirectoryManifestValidator()
+
+    data class DirectoryStaging(
+        val staging: StorageLocation,
+        val target: StorageLocation,
+        val type: StorageBackendType
+    )
+
+    suspend fun createDirectoryStaging(
+        sourceName: String,
+        destination: StorageLocation,
+        destType: StorageBackendType
+    ): DirectoryStaging {
+        val suffix = java.util.UUID.randomUUID().toString()
+        return when (destType) {
+            StorageBackendType.LOCAL -> {
+                val target = resolveLocalDestFile(sourceName, destination.path)
+                val staging = File(target.parentFile, ".${target.name}.wkw-$suffix.tmp")
+                if (!staging.mkdir()) throw IOException("Failed to create local directory staging: ${staging.absolutePath}")
+                DirectoryStaging(StorageLocation(staging.absolutePath, destination.rootId), StorageLocation(target.absolutePath, destination.rootId), destType)
+            }
+            StorageBackendType.SAF -> {
+                val parent = resolveSafDocument(Uri.parse(destination.path))
+                    ?: throw FileNotFoundException("Destination SAF folder not found: ${destination.path}")
+                if (!parent.isDirectory) throw IOException("SAF directory copy requires a destination directory: ${destination.path}")
+                val stagingName = ".$sourceName.wkw-$suffix.tmp"
+                val staging = parent.createDirectory(stagingName)
+                    ?: throw IOException("Failed to create SAF directory staging: $stagingName")
+                val target = parent.findFile(sourceName)
+                DirectoryStaging(
+                    StorageLocation(staging.uri.toString(), destination.rootId),
+                    StorageLocation(target?.uri?.toString() ?: "${parent.uri}#$sourceName", destination.rootId),
+                    destType
+                )
+            }
+            StorageBackendType.SHIZUKU -> {
+                val service = getShizukuService()
+                val target = resolveShizukuDestFilePath(sourceName, destination.path)
+                val staging = "$target.wkw-$suffix.tmp"
+                if (!service.createDirectory(staging)) throw IOException("Failed to create Shizuku directory staging: $staging")
+                DirectoryStaging(StorageLocation(staging, destination.rootId), StorageLocation(target, destination.rootId), destType)
+            }
+            StorageBackendType.ROOT -> {
+                val target = resolveRootDestFilePath(sourceName, destination.path)
+                val staging = SuFile("$target.wkw-$suffix.tmp")
+                if (!staging.mkdir()) throw IOException("Failed to create root directory staging: ${staging.absolutePath}")
+                DirectoryStaging(StorageLocation(staging.absolutePath, destination.rootId), StorageLocation(target, destination.rootId), destType)
+            }
+        }
+    }
+
+    suspend fun publishDirectoryStaging(staging: DirectoryStaging, sourceName: String, destination: StorageLocation) {
+        when (staging.type) {
+            StorageBackendType.LOCAL -> publishLocalDirectory(File(staging.staging.path), File(staging.target.path))
+            StorageBackendType.SAF -> {
+                val parent = resolveSafDocument(Uri.parse(destination.path))
+                    ?: throw FileNotFoundException("Destination SAF folder not found: ${destination.path}")
+                val staged = resolveSafDocument(Uri.parse(staging.staging.path))
+                    ?: throw FileNotFoundException("SAF staging directory disappeared: ${staging.staging.path}")
+                publishSafDirectory(parent, staged, sourceName)
+            }
+            StorageBackendType.SHIZUKU -> publishShizukuDirectory(getShizukuService(), staging.staging.path, staging.target.path)
+            StorageBackendType.ROOT -> publishRootDirectory(SuFile(staging.staging.path), SuFile(staging.target.path), staging.target.rootId)
+        }
+    }
+
+    suspend fun cleanupDirectoryStaging(staging: DirectoryStaging) {
+        when (staging.type) {
+            StorageBackendType.LOCAL -> File(staging.staging.path).let { if (it.exists() && !it.deleteRecursively()) throw IOException("Failed to clean local directory staging: ${it.absolutePath}") }
+            StorageBackendType.SAF -> resolveSafDocument(Uri.parse(staging.staging.path))?.let { if (it.exists() && !it.delete()) throw IOException("Failed to clean SAF directory staging: ${it.uri}") }
+            StorageBackendType.SHIZUKU -> getShizukuService().let { if (it.exists(staging.staging.path) && !it.delete(staging.staging.path)) throw IOException("Failed to clean Shizuku directory staging: ${staging.staging.path}") }
+            StorageBackendType.ROOT -> if (SuFile(staging.staging.path).exists()) rootFileSystem.delete(staging.staging)
+        }
+    }
+
 
     suspend fun createDestDirectory(
         dirName: String,
@@ -76,9 +153,34 @@ class CrossFilesystemDirectoryTransferHelper(
 
     suspend fun isSourceDirectory(source: StorageLocation, sourceType: StorageBackendType): Boolean = when (sourceType) {
         StorageBackendType.LOCAL -> File(source.path).isDirectory
-        StorageBackendType.SAF -> resolveSafDocument(Uri.parse(source.path))?.let { try { it.isDirectory } catch (_: Exception) { false } } ?: false
+        StorageBackendType.SAF -> {
+            val document = resolveSafDocument(Uri.parse(source.path))
+                ?: throw FileNotFoundException("Source SAF document not found: ${source.path}")
+            try {
+                document.isDirectory
+            } catch (error: SecurityException) {
+                throw error
+            } catch (error: Exception) {
+                throw IOException("Failed to inspect SAF source: ${source.path}", error)
+            }
+        }
         StorageBackendType.SHIZUKU -> getShizukuService().isDirectory(source.path)
         StorageBackendType.ROOT -> SuFile(source.path).isDirectory
+    }
+
+    suspend fun calculateTotalSize(source: StorageLocation, sourceType: StorageBackendType): Long {
+        if (!isSourceDirectory(source, sourceType)) {
+            return when (sourceType) {
+                StorageBackendType.LOCAL -> File(source.path).length()
+                StorageBackendType.SAF -> resolveSafDocument(Uri.parse(source.path))?.length() ?: 0L
+                StorageBackendType.SHIZUKU -> getShizukuService().length(source.path)
+                StorageBackendType.ROOT -> SuFile(source.path).length()
+            }
+        }
+
+        return listSourceChildren(source, sourceType).sumOf { child ->
+            calculateTotalSize(child, sourceType)
+        }
     }
 
     fun getSourceName(source: StorageLocation, sourceType: StorageBackendType): String = when (sourceType) {
@@ -89,18 +191,35 @@ class CrossFilesystemDirectoryTransferHelper(
     }
 
     suspend fun listSourceChildren(source: StorageLocation, sourceType: StorageBackendType): List<StorageLocation> = when (sourceType) {
-        StorageBackendType.LOCAL -> (File(source.path).listFiles() ?: emptyArray()).map { StorageLocation(it.absolutePath, source.rootId) }
+        StorageBackendType.LOCAL -> {
+            val children = File(source.path).listFiles()
+                ?: throw IOException("Failed to list local source directory: ${source.path}")
+            children.map { StorageLocation(it.absolutePath, source.rootId) }
+        }
         StorageBackendType.SAF -> {
             val doc = resolveSafDocument(Uri.parse(source.path))
-            val children = if (doc != null) (try { doc.listFiles() } catch (_: Exception) { emptyArray() }) else emptyArray()
+                ?: throw FileNotFoundException("Source SAF directory not found: ${source.path}")
+            val children = try {
+                doc.listFiles()
+            } catch (error: SecurityException) {
+                throw error
+            } catch (error: Exception) {
+                throw IOException("Failed to list SAF source directory: ${source.path}", error)
+            }
             children.map { StorageLocation(it.uri.toString(), source.rootId) }
         }
-        StorageBackendType.SHIZUKU -> getShizukuService().listDirectory(source.path).mapNotNull { bundle ->
+        StorageBackendType.SHIZUKU -> getShizukuService().listDirectory(source.path).map { bundle ->
             val path = bundle.getString(ShizukuIpcConstants.KEY_PATH)
+                ?: throw IOException("Invalid Shizuku directory entry without a path: ${source.path}")
             val name = bundle.getString(ShizukuIpcConstants.KEY_NAME)
-            if (path != null && name != "." && name != "..") StorageLocation(path, source.rootId) else null
+                ?: throw IOException("Invalid Shizuku directory entry without a name: ${source.path}")
+            if (name == "." || name == "..") null else StorageLocation(path, source.rootId)
+        }.filterNotNull()
+        StorageBackendType.ROOT -> {
+            val children = SuFile(source.path).listFiles()
+                ?: throw IOException("Failed to list root source directory: ${source.path}")
+            children.map { StorageLocation(it.absolutePath, source.rootId) }
         }
-        StorageBackendType.ROOT -> (SuFile(source.path).listFiles() ?: emptyArray()).map { StorageLocation(it.absolutePath, source.rootId) }
     }
 
     suspend fun validateTransferComplete(
@@ -109,19 +228,159 @@ class CrossFilesystemDirectoryTransferHelper(
         sourceType: StorageBackendType,
         destType: StorageBackendType,
         isSourceDir: Boolean,
-        expectedSize: Long
+        destinationWasDirectory: Boolean
     ) {
         val sourceName = getSourceName(source, sourceType)
-        val destSize = getDestFileSize(sourceName, destination, destType)
+        val destinationTarget = resolveDestinationTarget(sourceName, destination, destType, destinationWasDirectory)
         if (!isSourceDir) {
-            if (destSize < 0 || (expectedSize > 0 && destSize != expectedSize)) {
+            val sourceSize = getFileSize(source, sourceType)
+            val destSize = getFileSize(destinationTarget, destType)
+            if (destSize != sourceSize) {
                 rollbackDestination(source, destination, sourceType, destType)
                 throw IOException("Cross-filesystem move validation failed: destination file incomplete or size mismatch")
             }
-        } else if (destSize < 0) {
-            rollbackDestination(source, destination, sourceType, destType)
-            throw IOException("Cross-filesystem move validation failed: destination directory not found")
+        } else {
+            val sourceManifest = collectDirectoryManifest(source, sourceType)
+            val destinationManifest = collectDirectoryManifest(destinationTarget, destType)
+            manifestValidator.validate(sourceManifest, destinationManifest)
         }
+    }
+
+    suspend fun isDestinationDirectory(destination: StorageLocation, destType: StorageBackendType): Boolean = when (destType) {
+        StorageBackendType.LOCAL -> File(destination.path).isDirectory
+        StorageBackendType.SAF -> resolveSafDocument(Uri.parse(destination.path))?.isDirectory == true
+        StorageBackendType.SHIZUKU -> getShizukuService().let { it.exists(destination.path) && it.isDirectory(destination.path) }
+        StorageBackendType.ROOT -> SuFile(destination.path).isDirectory
+    }
+
+    private suspend fun collectDirectoryManifest(
+        root: StorageLocation,
+        type: StorageBackendType
+    ): List<DirectoryManifestEntry> {
+        val entries = mutableListOf<DirectoryManifestEntry>()
+        val queue = ArrayDeque<Pair<StorageLocation, String>>()
+        queue.add(root to "")
+        while (queue.isNotEmpty()) {
+            currentCoroutineContext().ensureActive()
+            val (location, relativePath) = queue.removeFirst()
+            if (!isSourceDirectory(location, type)) {
+                throw IOException("Move validation failed: expected directory at ${location.path}")
+            }
+            val children = listSourceChildren(location, type)
+            for (child in children) {
+                currentCoroutineContext().ensureActive()
+                val name = getSourceName(child, type)
+                val childRelativePath = if (relativePath.isEmpty()) name else "$relativePath/$name"
+                val isDirectory = isSourceDirectory(child, type)
+                entries += DirectoryManifestEntry(
+                    relativePath = childRelativePath,
+                    isDirectory = isDirectory,
+                    size = if (isDirectory) 0L else getFileSize(child, type)
+                )
+                if (isDirectory) queue.add(child to childRelativePath)
+            }
+        }
+        return entries
+    }
+
+    private suspend fun resolveDestinationTarget(
+        sourceName: String,
+        destination: StorageLocation,
+        destType: StorageBackendType,
+        destinationWasDirectory: Boolean
+    ): StorageLocation = when (destType) {
+        StorageBackendType.LOCAL -> StorageLocation(
+            if (destinationWasDirectory) File(destination.path, sourceName).absolutePath else destination.path,
+            destination.rootId
+        )
+        StorageBackendType.SAF -> {
+            val destinationDocument = resolveSafDocument(Uri.parse(destination.path))
+                ?: throw FileNotFoundException("Destination SAF document not found: ${destination.path}")
+            val target = if (destinationWasDirectory) destinationDocument.findFile(sourceName) else destinationDocument
+            target?.let { StorageLocation(it.uri.toString(), destination.rootId) }
+                ?: throw FileNotFoundException("Destination SAF target not found: $sourceName")
+        }
+        // These backends receive a parent path from the cross-filesystem bridge and
+        // create the source-named child below it for both files and directories.
+        StorageBackendType.SHIZUKU -> StorageLocation(
+            resolveShizukuDestFilePath(sourceName, destination.path),
+            destination.rootId
+        )
+        StorageBackendType.ROOT -> StorageLocation(
+            resolveRootDestFilePath(sourceName, destination.path),
+            destination.rootId
+        )
+    }
+
+    private fun publishLocalDirectory(staged: File, target: File) {
+        if (!target.exists()) { if (!staged.renameTo(target)) throw IOException("Failed to publish local directory: ${target.absolutePath}"); return }
+        val backup = File(target.parentFile, ".${target.name}.wkw-${java.util.UUID.randomUUID()}.bak")
+        if (!target.renameTo(backup)) throw IOException("Failed to preserve local destination: ${target.absolutePath}")
+        try {
+            if (!staged.renameTo(target)) throw IOException("Failed to publish local directory: ${target.absolutePath}")
+            if (!backup.deleteRecursively() && backup.exists()) throw IOException("Failed to remove local directory backup: ${backup.absolutePath}")
+        } catch (error: Throwable) {
+            if (target.exists()) target.deleteRecursively()
+            if (!backup.renameTo(target)) error.addSuppressed(IOException("Failed to restore local destination: ${target.absolutePath}"))
+            throw error
+        }
+    }
+
+    private fun publishSafDirectory(parent: DocumentFile, staged: DocumentFile, name: String) {
+        val existing = parent.findFile(name)
+        if (existing == null) { if (!staged.renameTo(name)) throw IOException("Failed to publish SAF directory: $name"); return }
+        val backupName = ".$name.wkw-${java.util.UUID.randomUUID()}.bak"
+        if (!existing.renameTo(backupName)) throw IOException("Failed to preserve SAF destination: $name")
+        try {
+            if (!staged.renameTo(name)) throw IOException("Failed to publish SAF directory: $name")
+            if (!existing.delete() && existing.exists()) throw IOException("Failed to remove SAF directory backup: $backupName")
+        } catch (error: Throwable) {
+            parent.findFile(name)?.let { if (!it.delete()) error.addSuppressed(IOException("Failed to remove failed SAF publish: $name")) }
+            if (!existing.renameTo(name)) error.addSuppressed(IOException("Failed to restore SAF destination: $name"))
+            throw error
+        }
+    }
+
+    private fun publishShizukuDirectory(service: IPrivilegedFileService, staged: String, target: String) {
+        if (!service.exists(target)) { if (!service.rename(staged, target)) throw IOException("Failed to publish Shizuku directory: $target"); return }
+        val backup = "$target.wkw-${java.util.UUID.randomUUID()}.bak"
+        if (!service.rename(target, backup)) throw IOException("Failed to preserve Shizuku destination: $target")
+        try {
+            if (!service.rename(staged, target)) throw IOException("Failed to publish Shizuku directory: $target")
+            if (!service.delete(backup) && service.exists(backup)) throw IOException("Failed to remove Shizuku directory backup: $backup")
+        } catch (error: Throwable) {
+            if (service.exists(target) && !service.delete(target)) error.addSuppressed(IOException("Failed to remove failed Shizuku publish: $target"))
+            if (!service.rename(backup, target)) error.addSuppressed(IOException("Failed to restore Shizuku destination: $target"))
+            throw error
+        }
+    }
+
+    private suspend fun publishRootDirectory(staged: SuFile, target: SuFile, rootId: String) {
+        if (!target.exists()) { if (!staged.renameTo(target)) throw IOException("Failed to publish root directory: ${target.absolutePath}"); return }
+        val backup = SuFile("${target.absolutePath}.wkw-${java.util.UUID.randomUUID()}.bak")
+        if (!target.renameTo(backup)) throw IOException("Failed to preserve root destination: ${target.absolutePath}")
+        try {
+            if (!staged.renameTo(target)) throw IOException("Failed to publish root directory: ${target.absolutePath}")
+            rootFileSystem.delete(StorageLocation(backup.absolutePath, rootId))
+        } catch (error: Throwable) {
+            try { if (target.exists()) rootFileSystem.delete(StorageLocation(target.absolutePath, rootId)) } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            if (!backup.renameTo(target)) error.addSuppressed(IOException("Failed to restore root destination: ${target.absolutePath}"))
+            throw error
+        }
+    }
+
+
+    private suspend fun getFileSize(location: StorageLocation, type: StorageBackendType): Long = when (type) {
+        StorageBackendType.LOCAL -> File(location.path).takeIf { it.exists() && it.isFile }?.length()
+            ?: throw FileNotFoundException("File not found during validation: ${location.path}")
+        StorageBackendType.SAF -> resolveSafDocument(Uri.parse(location.path))?.takeIf { it.exists() && it.isFile }?.length()
+            ?: throw FileNotFoundException("SAF file not found during validation: ${location.path}")
+        StorageBackendType.SHIZUKU -> getShizukuService().let { service ->
+            if (!service.exists(location.path) || service.isDirectory(location.path)) throw FileNotFoundException("Shizuku file not found during validation: ${location.path}")
+            service.length(location.path)
+        }
+        StorageBackendType.ROOT -> SuFile(location.path).takeIf { it.exists() && it.isFile }?.length()
+            ?: throw FileNotFoundException("Root file not found during validation: ${location.path}")
     }
 
     suspend fun rollbackDestination(
@@ -156,29 +415,6 @@ class CrossFilesystemDirectoryTransferHelper(
         StorageBackendType.SAF -> safFileSystem.delete(source)
         StorageBackendType.SHIZUKU -> safShizukuFileSystem.delete(source)
         StorageBackendType.ROOT -> rootFileSystem.delete(source)
-    }
-
-    private suspend fun getDestFileSize(sourceFileName: String, destination: StorageLocation, destType: StorageBackendType): Long = when (destType) {
-        StorageBackendType.LOCAL -> {
-            val file = resolveLocalDestFile(sourceFileName, destination.path)
-            if (file.exists()) (if (file.isDirectory) 0L else file.length()) else -1L
-        }
-        StorageBackendType.SAF -> {
-            val doc = resolveSafDocument(Uri.parse(destination.path))
-            if (doc != null && doc.exists()) {
-                val target = if (doc.isDirectory) doc.findFile(sourceFileName) else doc
-                if (target != null && target.exists()) (if (target.isDirectory) 0L else target.length()) else -1L
-            } else -1L
-        }
-        StorageBackendType.SHIZUKU -> {
-            val service = getShizukuService()
-            val path = resolveShizukuDestFilePath(sourceFileName, destination.path)
-            if (service.exists(path)) (if (service.isDirectory(path)) 0L else service.length(path)) else -1L
-        }
-        StorageBackendType.ROOT -> {
-            val file = SuFile(resolveRootDestFilePath(sourceFileName, destination.path))
-            if (file.exists()) (if (file.isDirectory) 0L else file.length()) else -1L
-        }
     }
 
     fun resolveLocalDestFile(sourceName: String, destPath: String): File =

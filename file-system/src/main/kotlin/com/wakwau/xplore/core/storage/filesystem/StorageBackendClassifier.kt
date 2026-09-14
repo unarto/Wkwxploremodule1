@@ -1,4 +1,4 @@
-// [Jalur Class/Modul]: core-storage-api/src/main/kotlin/com/wakwau/xplore/core/storage/filesystem/StorageBackendClassifier.kt
+// [Jalur Class/Modul]: file-system/src/main/kotlin/com/wakwau/xplore/core/storage/filesystem/StorageBackendClassifier.kt
 // [Penjelasan]: Mengklasifikasikan tipe filesystem backend (LOCAL, SAF, SHIZUKU, ROOT) secara dinamis berdasarkan availability aktual su, shizuku, SAF URI permission, dan karakteristik lokasi berkas tanpa ketergantungan framework platform di core-storage-api.
 package com.wakwau.xplore.core.storage.filesystem
 

@@ -1,5 +1,5 @@
 // [Jalur Class/Modul]: file-system/src/main/kotlin/com/wakwau/xplore/core/storage/repository/StorageVolumeRepositoryImpl.kt
-// [Penjelasan]: Repository orchestrator tipis untuk volume penyimpanan. Mendelegasikan deteksi ke provider-provider granular (Internal, External, Root, SAF) dan merespon event media via BroadcastReceiver terisolasi.
+// [Penjelasan]: Repository volume application-scoped dengan receiver aktif hanya ketika flow memiliki collector.
 package com.wakwau.xplore.core.storage.repository
 
 import android.content.Context
@@ -9,78 +9,96 @@ import com.wakwau.xplore.core.storage.provider.volume.ExternalVolumeProvider
 import com.wakwau.xplore.core.storage.provider.volume.InternalVolumeProvider
 import com.wakwau.xplore.core.storage.provider.volume.RootVolumeProvider
 import com.wakwau.xplore.core.storage.provider.volume.SafVolumeProvider
-import com.wakwau.xplore.core.storage.provider.volume.StorageVolumeBroadcastReceiver
+import com.wakwau.xplore.core.storage.provider.volume.StorageVolumeChangeMonitor
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.stateIn
 
-class StorageVolumeRepositoryImpl(
-    private val context: Context,
-    private val internalVolumeProvider: InternalVolumeProvider,
-    private val externalVolumeProvider: ExternalVolumeProvider,
-    private val rootVolumeProvider: RootVolumeProvider,
-    private val safVolumeProvider: SafVolumeProvider,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+class StorageVolumeRepositoryImpl internal constructor(
+    context: Context,
+    ioDispatcher: CoroutineDispatcher,
+    private val loadVolumes: suspend () -> List<StorageVolumeItem>
 ) : StorageVolumeRepository {
-
-    private val _volumes = MutableStateFlow<List<StorageVolumeItem>>(emptyList())
-    private val scope = CoroutineScope(ioDispatcher)
-    private val broadcastReceiver = StorageVolumeBroadcastReceiver {
-        scope.launch {
-            refreshVolumes()
+    constructor(
+        context: Context,
+        internalVolumeProvider: InternalVolumeProvider,
+        externalVolumeProvider: ExternalVolumeProvider,
+        rootVolumeProvider: RootVolumeProvider,
+        safVolumeProvider: SafVolumeProvider,
+        ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    ) : this(
+        context = context.applicationContext,
+        ioDispatcher = ioDispatcher,
+        loadVolumes = {
+            buildVolumeList(
+                internalVolumeProvider,
+                externalVolumeProvider,
+                rootVolumeProvider,
+                safVolumeProvider
+            )
         }
-    }
+    )
 
-    init {
-        broadcastReceiver.register(context)
-        scope.launch {
-            refreshVolumes()
+    private val monitor = StorageVolumeChangeMonitor(context)
+    private val repositoryJob = SupervisorJob()
+    private val repositoryScope = CoroutineScope(repositoryJob + ioDispatcher)
+    private val manualRefresh = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val volumes = merge(monitor.changes, manualRefresh)
+        .mapLatest {
+            currentCoroutineContext().ensureActive()
+            loadVolumes()
         }
-    }
+        .stateIn(
+            scope = repositoryScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 0),
+            initialValue = emptyList()
+        )
 
-    override fun getVolumes(): Flow<List<StorageVolumeItem>> {
-        return _volumes.asStateFlow()
-    }
+    override fun getVolumes(): Flow<List<StorageVolumeItem>> = volumes
 
     override suspend fun refreshVolumes() {
-        val newVolumes = mutableListOf<StorageVolumeItem>()
-
-        // 1. Internal Storage
-        val internalVolume = internalVolumeProvider.getInternalVolume()
-        newVolumes.add(internalVolume)
-
-        // 2 & 3. Deteksi SD Card & USB OTG
-        val externalVolumes = externalVolumeProvider.getExternalVolumes(internalVolume.rootPath)
-        newVolumes.addAll(externalVolumes)
-
-        // 4. Root Storage
-        val rootVolume = rootVolumeProvider.getRootVolume()
-        newVolumes.add(rootVolume)
-
-        // 5. SAF Persisted URIs
-        val safVolumes = safVolumeProvider.getSafVolumes()
-        newVolumes.addAll(safVolumes)
-
-        // Sort volumes based on priority order and chronological timestamp
-        newVolumes.sortWith(Comparator { a, b ->
-            val orderA = getOrderForType(a.type)
-            val orderB = getOrderForType(b.type)
-            if (orderA != orderB) {
-                orderA.compareTo(orderB)
-            } else {
-                a.createdAt.compareTo(b.createdAt)
-            }
-        })
-
-        _volumes.value = newVolumes
+        currentCoroutineContext().ensureActive()
+        manualRefresh.emit(Unit)
     }
 
-    private fun getOrderForType(type: StorageVolumeType): Int {
-        return when (type) {
+    override fun close() {
+        repositoryScope.cancel()
+    }
+
+    internal val lifecycleJob: Job
+        get() = repositoryJob
+
+    private companion object {
+        suspend fun buildVolumeList(
+            internalVolumeProvider: InternalVolumeProvider,
+            externalVolumeProvider: ExternalVolumeProvider,
+            rootVolumeProvider: RootVolumeProvider,
+            safVolumeProvider: SafVolumeProvider
+        ): List<StorageVolumeItem> {
+            val volumes = mutableListOf<StorageVolumeItem>()
+            val internalVolume = internalVolumeProvider.getInternalVolume()
+            volumes += internalVolume
+            volumes += externalVolumeProvider.getExternalVolumes(internalVolume.rootPath)
+            volumes += rootVolumeProvider.getRootVolume()
+            volumes += safVolumeProvider.getSafVolumes()
+            return volumes.sortedWith(
+                compareBy<StorageVolumeItem> { orderForType(it.type) }
+                    .thenBy { it.createdAt }
+            )
+        }
+
+        fun orderForType(type: StorageVolumeType): Int = when (type) {
             StorageVolumeType.PRIMARY_INTERNAL -> 1
             StorageVolumeType.SECONDARY_SDCARD -> 2
             StorageVolumeType.USB_OTG -> 3

@@ -36,7 +36,10 @@ class SafShizukuFileSystem(
         }
 
         val bundles = service.listDirectory(location.path)
-        val mappedItems = bundles.mapNotNull { bundleMapper.mapBundleToFileItem(it, location.rootId) }
+        val mappedItems = bundles.map { bundle ->
+            bundleMapper.mapBundleToFileItem(bundle, location.rootId)
+                ?: throw IOException("Invalid entry returned while listing privileged directory: ${location.path}")
+        }
         
         return mappedItems.filter { item ->
             if (!showHidden) !item.metadata.isHidden else true
@@ -158,7 +161,7 @@ class SafShizukuFileSystem(
         }
 
         if (service.isDirectory(source.path)) {
-            transferHandler.copyDirectoryRecursively(service, source.path, destination.path, totalBytes) { incrementalBytes, fileName ->
+            transferHandler.copyDirectoryTransactionally(service, source.path, destination.path, totalBytes) { incrementalBytes, fileName ->
                 totalCopied += incrementalBytes
                 emit(FileOperationProgress(totalCopied, totalBytes, fileName))
             }
