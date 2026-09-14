@@ -25,8 +25,6 @@ sealed class OperationUiState {
     ) : OperationUiState() {
         val currentConflict: FileConflict?
             get() = pendingConflicts.getOrNull(currentConflictIndex)
-        val remainingConflictsCount: Int
-            get() = (pendingConflicts.size - currentConflictIndex).coerceAtLeast(0)
     }
     data class Running(val operationNameRes: Int, val progress: FileOperationProgress? = null) : OperationUiState()
     data class Success(val messageRes: Int) : OperationUiState()

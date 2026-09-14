@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wakwau.xplore.core.storage.constant.StorageConstants
 import com.wakwau.xplore.core.storage.model.FileItem
-import com.wakwau.xplore.core.utils.ui.formatter.DateFormatter
+import com.wakwau.xplore.core.utils.formatter.DateFormatter
 import com.wakwau.xplore.core.utils.ui.theme.XPloreTheme
 import com.wakwau.xplore.core.utils.formatter.ByteFormatter
 import com.wakwau.xplore.filemanager.ui.R

@@ -270,7 +270,6 @@ fun XploreRoot(
                         is FileDialogUiState.DeleteConfirmation -> {
                             DeleteConfirmationDialog(
                                 itemCount = dialogState.items.size,
-                                itemName = dialogState.items.firstOrNull()?.name,
                                 onConfirm = {
                                     dualPaneViewModel.dispatch(DualPaneEvent.DeleteSelected(dialogState.items))
                                 },

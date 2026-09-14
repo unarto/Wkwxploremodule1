@@ -3,6 +3,7 @@
 package com.wakwau.xplore.filemanager.action
 
 import com.wakwau.xplore.core.storage.model.StorageLocation
+import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.storage.operation.FileOperationResult
 import com.wakwau.xplore.filemanager.constant.FileOperationConstants
 import com.wakwau.xplore.filemanager.event.DualPaneEvent
@@ -12,7 +13,8 @@ import kotlinx.coroutines.CancellationException
 
 class CreateDirectoryOperationHandler(
     private val createDirectoryUseCase: CreateDirectoryUseCase,
-    private val dispatch: (DualPaneEvent) -> Unit
+    private val dispatch: (DualPaneEvent) -> Unit,
+    private val onCreated: suspend (FileItem) -> Unit = {}
 ) {
     suspend fun execute(state: DualPaneState, parentLocation: StorageLocation, name: String) {
         val panel = state.activePanel
@@ -20,6 +22,7 @@ class CreateDirectoryOperationHandler(
         try {
             when (val result = createDirectoryUseCase(parentLocation, name)) {
                 is FileOperationResult.Success -> {
+                    onCreated(result.data)
                     dispatch(DualPaneEvent.OperationSuccess(FileOperationConstants.SUCCESS_CREATE_DIR))
                     dispatch(DualPaneEvent.Refresh(panel.id))
                 }

@@ -201,12 +201,17 @@ class OperationOrchestratorErrorHandlingTest {
     @Test
     fun copyOrchestrator_ioException_dispatchesOperationFailedWithIoError() = runTest {
         bgClient.errorToThrow = IOException("ENOSPC - no space left on device")
-        val orchestrator = CopyOperationOrchestrator(copyUseCase, detectConflictsUseCase, resolveTransferUseCase, testStorageErrorMapper, { events.add(it) })
+        var indexMutationQueued = false
+        val orchestrator = CopyOperationOrchestrator(
+            copyUseCase, detectConflictsUseCase, resolveTransferUseCase, testStorageErrorMapper,
+            { events.add(it) }, onEnqueued = { indexMutationQueued = true }
+        )
         orchestrator.execute(testState, listOf(testFileItem), "/storage/emulated/0/target")
 
         val failedEvent = events.filterIsInstance<DualPaneEvent.OperationFailed>().firstOrNull()
         assertEquals(FileOperationError.IO_ERROR.name, failedEvent?.error)
         assertTrue(events.none { it is DualPaneEvent.OperationCancelled })
+        assertTrue(!indexMutationQueued)
     }
 
     @Test
@@ -237,12 +242,17 @@ class OperationOrchestratorErrorHandlingTest {
     @Test
     fun moveOrchestrator_ioException_dispatchesOperationFailed() = runTest {
         bgClient.errorToThrow = IOException("ENOSPC - no space left on device")
-        val orchestrator = MoveOperationOrchestrator(moveUseCase, detectConflictsUseCase, resolveTransferUseCase, testStorageErrorMapper, { events.add(it) })
+        var indexMutationQueued = false
+        val orchestrator = MoveOperationOrchestrator(
+            moveUseCase, detectConflictsUseCase, resolveTransferUseCase, testStorageErrorMapper,
+            { events.add(it) }, onEnqueued = { indexMutationQueued = true }
+        )
         orchestrator.execute(testState, listOf(testFileItem), "/storage/emulated/0/target")
 
         val failedEvent = events.filterIsInstance<DualPaneEvent.OperationFailed>().firstOrNull()
         assertEquals(FileOperationError.IO_ERROR.name, failedEvent?.error)
         assertTrue(events.none { it is DualPaneEvent.OperationCancelled })
+        assertTrue(!indexMutationQueued)
     }
 
     // --- DeleteOperationOrchestrator Tests ---
@@ -250,7 +260,11 @@ class OperationOrchestratorErrorHandlingTest {
     @Test
     fun deleteOrchestrator_cancellationException_dispatchesOperationCancelled() = runTest {
         bgClient.errorToThrow = CancellationException("Delete user cancelled")
-        val orchestrator = DeleteOperationOrchestrator(deleteUseCase, testStorageErrorMapper) { events.add(it) }
+        val orchestrator = DeleteOperationOrchestrator(
+            deleteUseCase,
+            testStorageErrorMapper,
+            dispatch = { events.add(it) }
+        )
         try {
             orchestrator.execute(testState, listOf(testFileItem))
         } catch (e: CancellationException) {}
@@ -262,11 +276,18 @@ class OperationOrchestratorErrorHandlingTest {
     @Test
     fun deleteOrchestrator_ioException_dispatchesOperationFailed() = runTest {
         bgClient.errorToThrow = IOException("Disk error")
-        val orchestrator = DeleteOperationOrchestrator(deleteUseCase, testStorageErrorMapper) { events.add(it) }
+        var indexMutationQueued = false
+        val orchestrator = DeleteOperationOrchestrator(
+            deleteUseCase,
+            testStorageErrorMapper,
+            { events.add(it) },
+            onEnqueued = { indexMutationQueued = true }
+        )
         orchestrator.execute(testState, listOf(testFileItem))
 
         val failedEvent = events.filterIsInstance<DualPaneEvent.OperationFailed>().firstOrNull()
         assertEquals(FileOperationError.UNKNOWN.name, failedEvent?.error)
         assertTrue(events.none { it is DualPaneEvent.OperationCancelled })
+        assertTrue(!indexMutationQueued)
     }
 }

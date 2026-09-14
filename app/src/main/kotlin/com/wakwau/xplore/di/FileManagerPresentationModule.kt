@@ -52,7 +52,11 @@ class FileManagerPresentationModule(
                         getParentLocationUseCase = useCaseModule.getParentLocationUseCase,
                         dispatch = dispatch
                     )
-                    val createDirectoryHandler = CreateDirectoryOperationHandler(useCaseModule.createDirectoryUseCase, dispatch)
+                    val createDirectoryHandler = CreateDirectoryOperationHandler(
+                        useCaseModule.createDirectoryUseCase,
+                        dispatch,
+                        appOrchestrator::syncCreatedItem
+                    )
                     val fileDetailHandler = FileDetailHandler(
                         getFileDetailedMetadataUseCase = useCaseModule.getFileDetailedMetadataUseCase,
                         computeFileChecksumUseCase = useCaseModule.computeFileChecksumUseCase,

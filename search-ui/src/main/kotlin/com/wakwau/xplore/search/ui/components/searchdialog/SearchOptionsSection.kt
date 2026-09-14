@@ -1,5 +1,5 @@
 // [Jalur Class/Modul]: search-ui/src/main/kotlin/com/wakwau/xplore/search/ui/components/searchdialog/SearchOptionsSection.kt
-// [Penjelasan]: Komponen opsi filter pencarian lanjutan (switch cari di arsip dan dropdown selector target berkas/folder/semua).
+// [Penjelasan]: Komponen dropdown filter target pencarian berkas/folder/semua.
 package com.wakwau.xplore.search.ui.components.searchdialog
 
 import androidx.compose.foundation.clickable
@@ -18,8 +18,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,8 +39,6 @@ import com.wakwau.xplore.search.ui.R
 fun SearchOptionsSection(
     searchType: SearchTargetType,
     onSearchTypeChange: (SearchTargetType) -> Unit,
-    searchInArchives: Boolean,
-    onSearchInArchivesChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = XPloreTheme.colors
@@ -51,31 +47,9 @@ fun SearchOptionsSection(
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.End
     ) {
-        // Left: Cari di arsip
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.clickable { onSearchInArchivesChange(!searchInArchives) }
-        ) {
-            Text(
-                text = stringResource(R.string.label_cari_di_arsip),
-                color = colors.textPrimary,
-                fontSize = 13.sp
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Switch(
-                checked = searchInArchives,
-                onCheckedChange = onSearchInArchivesChange,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = colors.primary,
-                    checkedTrackColor = colors.primary.copy(alpha = 0.5f)
-                ),
-                modifier = Modifier.testTag("search_in_archives_switch")
-            )
-        }
-
-        // Right: Filter Target (semua / file / folder)
+        // Filter Target (semua / file / folder)
         Box {
             Row(
                 verticalAlignment = Alignment.CenterVertically,

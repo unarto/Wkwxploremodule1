@@ -55,7 +55,8 @@ class AppCompositionRoot(val applicationContext: Context) {
         AppOrchestratorViewModel(
             useCaseModule = fileManagerUseCaseModuleInternal,
             storageErrorMapper = storageModule.storageErrorMapper,
-            backgroundOperationClient = backgroundOperationClientInternal
+            backgroundOperationClient = backgroundOperationClientInternal,
+            fileIndexSynchronizer = storageModule.fileIndexSynchronizer
         )
     }
 

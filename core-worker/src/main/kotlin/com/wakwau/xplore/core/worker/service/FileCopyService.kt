@@ -94,14 +94,6 @@ class FileCopyService(
                     val sources = FileOperationIntentParser.parseStorageLocations(sourcesJson)
                     val destination = destJson?.let { FileOperationIntentParser.parseStorageLocation(JSONObject(it)) }
                     startOperation(type, sources, destination)
-                } else {
-                    val sourcePaths = intent.getStringArrayListExtra("sourcePaths")
-                    val targetPath = intent.getStringExtra("targetPath")
-                    if (sourcePaths != null && targetPath != null) {
-                        val sources = sourcePaths.map { StorageLocation(it, "") }
-                        val destination = StorageLocation(targetPath, "")
-                        startOperation(type, sources, destination)
-                    }
                 }
             }
             ACTION_CANCEL -> {

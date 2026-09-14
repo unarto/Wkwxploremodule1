@@ -10,8 +10,7 @@ class DeleteFilesUseCase(private val backgroundOperationClient: BackgroundOperat
     fun invoke(sources: List<StorageLocation>) {
         backgroundOperationClient.enqueueOperation(
             BackgroundOperationType.DELETE,
-            sources,
-            StorageLocation("", "")
+            sources
         )
     }
 }

@@ -15,6 +15,7 @@ import com.wakwau.xplore.fileoperations.conflict.DetectConflictsUseCase
 import com.wakwau.xplore.fileoperations.conflict.FileConflict
 import com.wakwau.xplore.fileoperations.conflict.ResolveTransferUseCase
 import com.wakwau.xplore.fileoperations.move.MoveFilesUseCase
+import com.wakwau.xplore.fileoperations.conflict.ResolvedTransferItem
 import kotlinx.coroutines.CancellationException
 
 class MoveOperationOrchestrator(
@@ -23,6 +24,7 @@ class MoveOperationOrchestrator(
     private val resolveTransferUseCase: ResolveTransferUseCase,
     private val storageErrorMapper: StorageErrorMapper,
     private val dispatch: (DualPaneEvent) -> Unit,
+    private val onEnqueued: (List<ResolvedTransferItem>) -> Unit = {},
     private val onShowConflict: ((isMove: Boolean, conflicts: List<FileConflict>, destinationDir: StorageLocation, allSources: List<StorageLocation>) -> Unit)? = null
 ) {
     suspend fun execute(
@@ -54,6 +56,7 @@ class MoveOperationOrchestrator(
 
             dispatch(DualPaneEvent.OperationStarted(FileOperationConstants.OPERATION_MOVE))
             moveFilesUseCase.invoke(resolved)
+            onEnqueued(resolved)
         } catch (e: CancellationException) {
             dispatch(DualPaneEvent.OperationCancelled)
             throw e
@@ -77,6 +80,7 @@ class MoveOperationOrchestrator(
 
             dispatch(DualPaneEvent.OperationStarted(FileOperationConstants.OPERATION_MOVE))
             moveFilesUseCase.invoke(resolved)
+            onEnqueued(resolved)
         } catch (e: CancellationException) {
             dispatch(DualPaneEvent.OperationCancelled)
             throw e

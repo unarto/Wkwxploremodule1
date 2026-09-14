@@ -73,8 +73,7 @@ class TreeState<T> {
                     node = node,
                     depth = node.depth,
                     isLastChild = isLastChild,
-                    ancestorHasNextSibling = ancestorsHasNextSibling,
-                    isEmptyPlaceholder = node.isPlaceholder
+                    ancestorHasNextSibling = ancestorsHasNextSibling
                 )
             )
             

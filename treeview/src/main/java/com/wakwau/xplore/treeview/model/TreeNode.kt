@@ -1,5 +1,5 @@
 // [Jalur Class/Modul]: treeview/src/main/java/com/wakwau/xplore/treeview/model/TreeNode.kt
-// [Penjelasan]: Properti status ekspansi node yang dapat dimutasi secara langsung oleh TreeSelectionHandler atau tree controller.
+// [Penjelasan]: Model node tree generik beserta relasi parent-child dan status ekspansinya.
 package com.wakwau.xplore.treeview.model
 
 import java.util.UUID

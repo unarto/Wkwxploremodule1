@@ -8,7 +8,7 @@ import android.net.Uri
 import androidx.core.net.toUri
 import com.wakwau.xplore.core.storage.provider.ShareableUriResolver
 import com.wakwau.xplore.core.storage.provider.ShareableUriResolverProvider
-import com.wakwau.xplore.core.utils.ui.formatter.MimeTypeDetector
+import com.wakwau.xplore.core.utils.mime.MimeTypeDetector
 
 object AppIntentResolver {
 
@@ -60,4 +60,3 @@ object AppIntentResolver {
         }
     }
 }
-

@@ -1,8 +1,7 @@
 // [Jalur Class/Modul]: file-system/src/main/kotlin/com/wakwau/xplore/core/storage/repository/DirectoryRepositoryImpl.kt
-// [Penjelasan]: Implementasi DirectoryRepository dengan delegasi bersih ke RootFileSystemContract, ShizukuFileSystemContract, SafFileSystemContract, dan LocalFileSystemContract berdasarkan StorageBackendClassifier serta otomatis memperbarui indeks Room DB tanpa menyamarkan error.
+// [Penjelasan]: Implementasi DirectoryRepository dengan delegasi ke physical filesystem berdasarkan StorageBackendClassifier tanpa menyamarkan error.
 package com.wakwau.xplore.core.storage.repository
 
-import com.wakwau.xplore.core.storage.mapper.toIndexItem
 import com.wakwau.xplore.core.storage.api.error.StorageErrorMapper
 import com.wakwau.xplore.core.storage.filesystem.LocalFileSystemContract
 import com.wakwau.xplore.core.storage.filesystem.RootFileSystemContract
@@ -13,7 +12,6 @@ import com.wakwau.xplore.core.storage.filesystem.StorageBackendType
 import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.storage.model.StorageLocation
 import com.wakwau.xplore.core.storage.operation.FileOperationResult
-import com.wakwau.xplore.core.storage.repository.FileIndexRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +24,6 @@ class DirectoryRepositoryImpl(
     private val rootFileSystem: RootFileSystemContract,
     private val backendClassifier: StorageBackendClassifier,
     private val storageErrorMapper: StorageErrorMapper,
-    private val fileIndexRepository: FileIndexRepository? = null,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : DirectoryRepository {
 
@@ -54,7 +51,6 @@ class DirectoryRepositoryImpl(
                 StorageBackendType.SAF -> safFileSystem.createDirectory(location, name)
                 StorageBackendType.LOCAL -> localFileSystem.createDirectory(location, name)
             }
-            fileIndexRepository?.addOrUpdateIndex(fileItem.toIndexItem())
             FileOperationResult.Success(fileItem)
         } catch (e: CancellationException) {
             throw e
@@ -63,5 +59,4 @@ class DirectoryRepositoryImpl(
         }
     }
 }
-
 

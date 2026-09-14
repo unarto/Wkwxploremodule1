@@ -8,6 +8,8 @@ import com.wakwau.xplore.core.storage.model.FileMetadata
 import com.wakwau.xplore.core.storage.model.FileType
 import com.wakwau.xplore.core.storage.model.StorageLocation
 import com.wakwau.xplore.core.storage.repository.FileIndexRepository
+import com.wakwau.xplore.core.storage.repository.DirectoryRepository
+import com.wakwau.xplore.core.storage.operation.FileOperationResult
 import com.wakwau.xplore.search.sync.FileIndexSynchronizer
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -23,33 +25,13 @@ class FileIndexSynchronizerTest {
 
     private lateinit var fakeRepository: FakeFileIndexRepository
     private lateinit var synchronizer: FileIndexSynchronizer
+    private lateinit var fakeDirectoryRepository: FakeDirectoryRepository
 
     @Before
     fun setup() {
         fakeRepository = FakeFileIndexRepository()
-        synchronizer = FileIndexSynchronizer(fakeRepository)
-    }
-
-    @Test
-    fun syncSingle_addsEntityToRepository() = runTest {
-        val item = FileItem(
-            id = "/storage/emulated/0/test.txt",
-            name = "test.txt",
-            location = StorageLocation("/storage/emulated/0/test.txt"),
-            type = FileType.FILE,
-            metadata = FileMetadata.EMPTY.copy(size = 100L, modifiedTime = 12345L)
-        )
-
-        // [Jalur Class/Modul]: search/src/test/kotlin/com/wakwau/xplore/search/FileIndexSynchronizerTest.kt
-        // [Penjelasan]: Menguji bahwa syncSingle mengonversi FileItem dan menyimpan entitas ke dalam repository.
-        synchronizer.syncSingle(item)
-
-        assertEquals(1, fakeRepository.indexMap.size)
-        val indexed = fakeRepository.indexMap["/storage/emulated/0/test.txt"]
-        assertEquals("test.txt", indexed?.fileName)
-        assertEquals("txt", indexed?.extension)
-        assertEquals(100L, indexed?.size)
-        assertEquals(false, indexed?.isDirectory)
+        fakeDirectoryRepository = FakeDirectoryRepository()
+        synchronizer = FileIndexSynchronizer(fakeRepository, fakeDirectoryRepository)
     }
 
     @Test
@@ -77,25 +59,6 @@ class FileIndexSynchronizerTest {
 
         assertEquals(2, fakeRepository.indexMap.size)
         assertTrue(fakeRepository.indexMap["/storage/emulated/0/folder"]?.isDirectory == true)
-    }
-
-    @Test
-    fun removeSingle_removesFromRepository() = runTest {
-        val item = FileItem(
-            id = "/storage/emulated/0/delete.txt",
-            name = "delete.txt",
-            location = StorageLocation("/storage/emulated/0/delete.txt"),
-            type = FileType.FILE,
-            metadata = FileMetadata.EMPTY
-        )
-        synchronizer.syncSingle(item)
-        assertEquals(1, fakeRepository.indexMap.size)
-
-        // [Jalur Class/Modul]: search/src/test/kotlin/com/wakwau/xplore/search/FileIndexSynchronizerTest.kt
-        // [Penjelasan]: Menguji penghapusan entitas tunggal dari repository berdasarkan filePath.
-        synchronizer.removeSingle("/storage/emulated/0/delete.txt")
-
-        assertEquals(0, fakeRepository.indexMap.size)
     }
 
     @Test
@@ -135,33 +98,94 @@ class FileIndexSynchronizerTest {
     }
 
     @Test
-    fun syncRename_updatesOldAndNewKeys() = runTest {
-        val oldPath = "/storage/emulated/0/old.txt"
-        val oldItem = FileItem(
-            id = oldPath,
-            name = "old.txt",
-            location = StorageLocation(oldPath),
-            type = FileType.FILE,
-            metadata = FileMetadata.EMPTY
-        )
-        synchronizer.syncSingle(oldItem)
+    fun syncCopied_indexesDestinationSubtree() = runTest {
+        val destination = StorageLocation("/target")
+        val root = directory("/target/copied")
+        val child = file("/target/copied/child.txt")
+        fakeDirectoryRepository.contents[destination] = listOf(root)
+        fakeDirectoryRepository.contents[root.location] = listOf(child)
 
-        val newItem = FileItem(
-            id = "/storage/emulated/0/renamed.txt",
-            name = "renamed.txt",
-            location = StorageLocation("/storage/emulated/0/renamed.txt"),
-            type = FileType.FILE,
-            metadata = FileMetadata.EMPTY
-        )
+        synchronizer.syncCopied(destination, root.location, root.name)
 
-        // [Jalur Class/Modul]: search/src/test/kotlin/com/wakwau/xplore/search/FileIndexSynchronizerTest.kt
-        // [Penjelasan]: Menguji bahwa syncRename menghapus path lama dan menambahkan entitas baru secara konsisten.
-        synchronizer.syncRename(oldPath, newItem)
-
-        assertEquals(1, fakeRepository.indexMap.size)
-        assertTrue(!fakeRepository.indexMap.containsKey(oldPath))
-        assertTrue(fakeRepository.indexMap.containsKey("/storage/emulated/0/renamed.txt"))
+        assertEquals(setOf(root.location.path, child.location.path), fakeRepository.indexMap.keys)
     }
+
+    @Test
+    fun syncMoved_removesSourceAndIndexesDestinationSubtree() = runTest {
+        synchronizer.syncBatch(listOf(directory("/source"), file("/source/old.txt")))
+        val destination = StorageLocation("/target")
+        val moved = directory("/target/moved")
+        val child = file("/target/moved/child.txt")
+        fakeDirectoryRepository.contents[destination] = listOf(moved)
+        fakeDirectoryRepository.contents[moved.location] = listOf(child)
+
+        synchronizer.syncMoved(StorageLocation("/source"), destination, moved.location, moved.name)
+
+        assertTrue(fakeRepository.indexMap.keys.none { it.startsWith("/source") })
+        assertTrue(fakeRepository.indexMap.keys.containsAll(listOf("/target/moved", "/target/moved/child.txt")))
+    }
+
+    @Test
+    fun syncRenamed_replacesOldSubtreeWithNewSubtree() = runTest {
+        synchronizer.syncBatch(listOf(directory("/old"), file("/old/child.txt")))
+        val renamed = directory("/new")
+        fakeDirectoryRepository.contents[renamed.location] = listOf(file("/new/child.txt"))
+
+        synchronizer.syncRenamed(StorageLocation("/old"), renamed)
+
+        assertTrue(fakeRepository.indexMap.keys.none { it.startsWith("/old") })
+        assertTrue(fakeRepository.indexMap.keys.containsAll(listOf("/new", "/new/child.txt")))
+    }
+
+    @Test
+    fun syncCreated_indexesCreatedItem() = runTest {
+        val created = directory("/created")
+        fakeDirectoryRepository.contents[created.location] = emptyList()
+
+        synchronizer.syncCreated(created)
+
+        assertTrue(fakeRepository.indexMap.containsKey("/created"))
+    }
+
+    @Test
+    fun syncCopied_doesNotIndexWhenDestinationCannotBeRead() = runTest {
+        fakeDirectoryRepository.failure = true
+
+        val result = runCatching {
+            synchronizer.syncCopied(StorageLocation("/target"), StorageLocation("/target/missing"), "missing")
+        }
+
+        assertTrue(result.isFailure)
+        assertTrue(fakeRepository.indexMap.isEmpty())
+    }
+
+    private fun directory(path: String) = FileItem(
+        id = path,
+        name = path.substringAfterLast('/'),
+        location = StorageLocation(path),
+        type = FileType.DIRECTORY,
+        metadata = FileMetadata.EMPTY
+    )
+
+    private fun file(path: String) = FileItem(
+        id = path,
+        name = path.substringAfterLast('/'),
+        location = StorageLocation(path),
+        type = FileType.FILE,
+        metadata = FileMetadata.EMPTY
+    )
+}
+
+private class FakeDirectoryRepository : DirectoryRepository {
+    val contents = mutableMapOf<StorageLocation, List<FileItem>>()
+    var failure = false
+
+    override suspend fun list(location: StorageLocation, showHidden: Boolean): FileOperationResult<List<FileItem>> =
+        if (failure) FileOperationResult.Failure(com.wakwau.xplore.core.storage.operation.FileOperationError.IO_ERROR)
+        else FileOperationResult.Success(contents[location].orEmpty())
+
+    override suspend fun create(location: StorageLocation, name: String): FileOperationResult<FileItem> =
+        FileOperationResult.Failure(com.wakwau.xplore.core.storage.operation.FileOperationError.UNKNOWN)
 }
 
 private class FakeFileIndexRepository : FileIndexRepository {
