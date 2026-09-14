@@ -5,12 +5,16 @@ package com.wakwau.xplore.search.sync
 import com.wakwau.xplore.core.storage.model.FileIndexItem
 import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.storage.model.FileType
+import com.wakwau.xplore.core.storage.model.StorageLocation
+import com.wakwau.xplore.core.storage.operation.FileOperationResult
+import com.wakwau.xplore.core.storage.repository.DirectoryRepository
 import com.wakwau.xplore.core.storage.repository.FileIndexRepository
 import com.wakwau.xplore.core.utils.mime.MimeTypeDetector
 import java.util.Locale
 
 class FileIndexSynchronizer(
-    private val fileIndexRepository: FileIndexRepository
+    private val fileIndexRepository: FileIndexRepository,
+    private val directoryRepository: DirectoryRepository
 ) {
 
     suspend fun syncBatch(items: List<FileItem>) {
@@ -19,39 +23,66 @@ class FileIndexSynchronizer(
         fileIndexRepository.addOrUpdateIndexBatch(indexBatch)
     }
 
-    suspend fun syncSingle(item: FileItem) {
-        fileIndexRepository.addOrUpdateIndex(createIndexItem(item))
-    }
-
-    suspend fun removeSingle(filePath: String) {
-        fileIndexRepository.removeIndex(filePath)
-    }
-
-    suspend fun removeBatch(filePaths: List<String>) {
-        if (filePaths.isEmpty()) return
-        fileIndexRepository.removeIndexBatch(filePaths)
-    }
-
     suspend fun removeByPrefix(prefix: String) {
         fileIndexRepository.removeIndexByPrefix(prefix)
     }
 
-    suspend fun removeByPrefixes(prefixes: List<String>) {
-        if (prefixes.isEmpty()) return
-        fileIndexRepository.removeIndexByPrefixes(prefixes)
+    suspend fun syncCreated(item: FileItem) {
+        syncBatch(collectSubtree(item))
     }
 
-    suspend fun syncRename(oldPath: String, newItem: FileItem) {
-        fileIndexRepository.syncRename(oldPath, createIndexItem(newItem))
+    suspend fun syncCopied(
+        destinationDirectory: StorageLocation,
+        targetLocation: StorageLocation,
+        targetName: String
+    ) {
+        val destinationItem = findDestinationItem(destinationDirectory, targetLocation, targetName)
+            ?: error("Copied destination was not found: ${targetLocation.path}")
+        syncBatch(collectSubtree(destinationItem))
     }
 
-    suspend fun syncMove(sourcePath: String, destinationItem: FileItem) {
-        fileIndexRepository.syncMove(sourcePath, createIndexItem(destinationItem))
+    suspend fun syncMoved(
+        source: StorageLocation,
+        destinationDirectory: StorageLocation,
+        targetLocation: StorageLocation,
+        targetName: String
+    ) {
+        val destinationItem = findDestinationItem(destinationDirectory, targetLocation, targetName)
+            ?: error("Moved destination was not found: ${targetLocation.path}")
+        val destinationItems = collectSubtree(destinationItem)
+        removeByPrefix(source.path)
+        syncBatch(destinationItems)
     }
 
-    suspend fun replacePrefixIndex(prefix: String, items: List<FileItem>) {
-        val indexItems = items.map { createIndexItem(it) }
-        fileIndexRepository.replacePrefixIndex(prefix, indexItems)
+    suspend fun syncRenamed(oldLocation: StorageLocation, renamedItem: FileItem) {
+        val renamedItems = collectSubtree(renamedItem)
+        removeByPrefix(oldLocation.path)
+        syncBatch(renamedItems)
+    }
+
+    private suspend fun collectSubtree(root: FileItem): List<FileItem> {
+        if (root.type != FileType.DIRECTORY) return listOf(root)
+
+        val descendants = when (val children = directoryRepository.list(root.location, showHidden = true)) {
+            is FileOperationResult.Success -> children.data.flatMap { collectSubtree(it) }
+            is FileOperationResult.Failure -> error("Unable to read indexed subtree: ${children.error}")
+            FileOperationResult.Cancelled -> error("Index subtree traversal was cancelled")
+            is FileOperationResult.Completed -> emptyList()
+        }
+        return listOf(root) + descendants
+    }
+
+    private suspend fun findDestinationItem(
+        destinationDirectory: StorageLocation,
+        targetLocation: StorageLocation,
+        targetName: String
+    ): FileItem? = when (val result = directoryRepository.list(destinationDirectory, showHidden = true)) {
+        is FileOperationResult.Success -> result.data.firstOrNull { item ->
+            item.location == targetLocation || item.name == targetName
+        }
+        is FileOperationResult.Failure -> error("Unable to read copied destination: ${result.error}")
+        FileOperationResult.Cancelled -> error("Destination index lookup was cancelled")
+        is FileOperationResult.Completed -> null
     }
 
     private fun createIndexItem(item: FileItem): FileIndexItem {

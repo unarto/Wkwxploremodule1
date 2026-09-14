@@ -12,7 +12,6 @@ import com.wakwau.xplore.core.utils.ui.components.AppDialog
 @Composable
 fun DeleteConfirmationDialog(
     itemCount: Int,
-    itemName: String? = null,
     onConfirm: () -> Unit,
     onDismissRequest: () -> Unit
 ) {

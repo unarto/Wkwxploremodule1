@@ -63,7 +63,6 @@ fun FileSearchDialog(
     val colors = XPloreTheme.colors
     var keyword by remember { mutableStateOf("") }
     var searchType by remember { mutableStateOf(SearchTargetType.ALL) }
-    var searchInArchives by remember { mutableStateOf(false) }
     var showHistoryDialog by remember { mutableStateOf(false) }
     val scopeLocation = state.searchScope ?: currentLocation
 
@@ -144,12 +143,10 @@ fun FileSearchDialog(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Row: Cari di arsip toggle & Target dropdown
+                    // Target type dropdown
                     SearchOptionsSection(
                         searchType = searchType,
-                        onSearchTypeChange = { searchType = it },
-                        searchInArchives = searchInArchives,
-                        onSearchInArchivesChange = { searchInArchives = it }
+                        onSearchTypeChange = { searchType = it }
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -204,8 +201,7 @@ fun FileSearchDialog(
                                     val query = FileSearchQuery(
                                         location = scopeLocation,
                                         keyword = keyword.trim(),
-                                        searchType = searchType,
-                                        searchInArchives = searchInArchives
+                                        searchType = searchType
                                     )
                                     onSearch(query)
                                     onDismiss()

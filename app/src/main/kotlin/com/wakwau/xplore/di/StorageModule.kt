@@ -23,7 +23,6 @@ import com.wakwau.xplore.core.storage.mapper.FileItemMapper
 import com.wakwau.xplore.core.storage.metadata.DetailedMetadataReader
 import com.wakwau.xplore.core.storage.metadata.FileMetadataReader
 import com.wakwau.xplore.core.storage.metadata.LocalDetailedMetadataReader
-import com.wakwau.xplore.core.storage.permission.AndroidStoragePermissionChecker
 import com.wakwau.xplore.core.storage.permission.CompositeStoragePermissionChecker
 import com.wakwau.xplore.core.storage.permission.FilePermissionFormatter
 import com.wakwau.xplore.core.storage.permission.ShizukuPermissionChecker
@@ -176,7 +175,8 @@ class StorageModule(private val applicationContext: Context) {
 
     val fileIndexSynchronizer: FileIndexSynchronizer by lazy {
         FileIndexSynchronizer(
-            fileIndexRepository = fileIndexRepository
+            fileIndexRepository = fileIndexRepository,
+            directoryRepository = directoryRepository
         )
     }
 
@@ -195,8 +195,7 @@ class StorageModule(private val applicationContext: Context) {
             safShizukuFileSystem = safShizukuFileSystem,
             rootFileSystem = rootFileSystem,
             backendClassifier = storageBackendClassifier,
-            storageErrorMapper = storageErrorMapper,
-            fileIndexRepository = fileIndexRepository
+            storageErrorMapper = storageErrorMapper
         )
     }
 
@@ -218,8 +217,7 @@ class StorageModule(private val applicationContext: Context) {
             rootFileSystem = rootFileSystem,
             crossFilesystemTransferBridge = crossFilesystemTransferBridge,
             backendClassifier = storageBackendClassifier,
-            storageErrorMapper = storageErrorMapper,
-            fileIndexRepository = fileIndexRepository
+            storageErrorMapper = storageErrorMapper
         )
     }
 

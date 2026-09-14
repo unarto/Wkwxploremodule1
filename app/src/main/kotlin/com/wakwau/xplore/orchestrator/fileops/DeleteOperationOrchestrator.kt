@@ -14,7 +14,8 @@ import kotlinx.coroutines.CancellationException
 class DeleteOperationOrchestrator(
     private val deleteFilesUseCase: DeleteFilesUseCase,
     private val storageErrorMapper: StorageErrorMapper,
-    private val dispatch: (DualPaneEvent) -> Unit
+    private val dispatch: (DualPaneEvent) -> Unit,
+    private val onEnqueued: (List<com.wakwau.xplore.core.storage.model.StorageLocation>) -> Unit = {}
 ) {
     suspend fun execute(state: DualPaneState, itemsToDelete: List<FileItem>) {
         val sourcePanel = state.activePanel
@@ -25,9 +26,8 @@ class DeleteOperationOrchestrator(
         try {
             val sources = itemsToDelete.map { it.location }
             deleteFilesUseCase.invoke(sources)
-            dispatch(DualPaneEvent.OperationSuccess(FileOperationConstants.SUCCESS_DELETE))
+            onEnqueued(sources)
             dispatch(DualPaneEvent.ClearSelection(sourcePanel.id))
-            dispatch(DualPaneEvent.Refresh(sourcePanel.id))
         } catch (e: CancellationException) {
             dispatch(DualPaneEvent.OperationCancelled)
             throw e

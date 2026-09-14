@@ -2,8 +2,6 @@
 // [Penjelasan]: Komponen dialog konfirmasi dan dialog informasi modular dengan styling tema X-plore.
 package com.wakwau.xplore.core.utils.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,13 +24,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.wakwau.xplore.core.utils.ui.R
-import com.wakwau.xplore.core.utils.ui.theme.DarkBorder
 import com.wakwau.xplore.core.utils.ui.theme.DarkSurface
-import com.wakwau.xplore.core.utils.ui.theme.DarkSurfaceElevated
 import com.wakwau.xplore.core.utils.ui.theme.XploreOrange
 
 object AppDialogDefaults {

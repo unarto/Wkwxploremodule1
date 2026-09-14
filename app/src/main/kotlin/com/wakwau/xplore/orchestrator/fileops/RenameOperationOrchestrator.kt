@@ -13,7 +13,8 @@ import kotlinx.coroutines.CancellationException
 
 class RenameOperationOrchestrator(
     private val renameFileUseCase: RenameFileUseCase,
-    private val dispatch: (DualPaneEvent) -> Unit
+    private val dispatch: (DualPaneEvent) -> Unit,
+    private val onRenamed: suspend (oldItem: FileItem, newItem: FileItem) -> Unit = { _, _ -> }
 ) {
     suspend fun execute(state: DualPaneState, item: FileItem, newName: String) {
         val panel = state.activePanel
@@ -22,6 +23,7 @@ class RenameOperationOrchestrator(
         try {
             when (val result = renameFileUseCase(item.location, newName)) {
                 is FileOperationResult.Success -> {
+                    onRenamed(item, result.data)
                     // [RenameFix]: Mencegah stale node query & double refresh berdasarkan ubahnama.md
                     dispatch(DualPaneEvent.OperationSuccess(FileOperationConstants.SUCCESS_RENAME))
                     dispatch(DualPaneEvent.ClearSelection(panel.id))

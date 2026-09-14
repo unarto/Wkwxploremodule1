@@ -24,9 +24,9 @@ import androidx.compose.ui.unit.sp
 import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.storage.model.FileType
 import com.wakwau.xplore.core.utils.ui.components.FileIcon
-import com.wakwau.xplore.core.utils.ui.formatter.ByteFormatter
-import com.wakwau.xplore.core.utils.ui.formatter.DateFormatter
-import com.wakwau.xplore.core.utils.ui.formatter.MimeTypeDetector
+import com.wakwau.xplore.core.utils.formatter.ByteFormatter
+import com.wakwau.xplore.core.utils.formatter.DateFormatter
+import com.wakwau.xplore.core.utils.mime.MimeTypeDetector
 import com.wakwau.xplore.core.utils.ui.theme.XPloreTheme
 
 @Composable

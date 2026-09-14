@@ -14,7 +14,7 @@ import androidx.compose.ui.unit.dp
 import com.wakwau.xplore.core.storage.constant.StorageConstants
 import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.utils.ui.components.FileIcon
-import com.wakwau.xplore.core.utils.ui.formatter.FileCategory
+import com.wakwau.xplore.core.utils.mime.FileCategory
 import com.wakwau.xplore.core.utils.ui.theme.XPloreTheme
 
 @Composable

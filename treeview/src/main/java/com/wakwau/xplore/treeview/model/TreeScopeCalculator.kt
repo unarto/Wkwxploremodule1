@@ -6,23 +6,23 @@ object TreeScopeCalculator {
 
     /**
      * Calculates the index range [startIndex..endIndex] in [visibleNodes]
-     * for a focused node matching [focusedIdOrPath].
+     * for a focused node matching [focusedKey].
      *
-     * - If the focused node is not found or focusedIdOrPath is null: returns null.
+     * - If the focused node is not found or focusedKey is null: returns null.
      * - If the focused node is a leaf or collapsed (not expanded): returns startIndex..startIndex.
      * - If the focused node is expanded: returns startIndex..endIndex where endIndex is the last
      *   visible descendant node with depth > parent.depth.
      */
     fun <T> calculateFocusRange(
         visibleNodes: List<FlattenedTreeNode<T>>,
-        focusedIdOrPath: String?,
-        idExtractor: (T) -> String = { it.toString() }
+        focusedKey: String?,
+        keyExtractor: (T) -> String = { it.toString() }
     ): IntRange? {
-        if (focusedIdOrPath == null || visibleNodes.isEmpty()) return null
+        if (focusedKey == null || visibleNodes.isEmpty()) return null
 
         val startIndex = visibleNodes.indexOfFirst { flattened ->
-            flattened.node.id == focusedIdOrPath || 
-            idExtractor(flattened.node.data) == focusedIdOrPath
+            flattened.node.id == focusedKey ||
+                keyExtractor(flattened.node.data) == focusedKey
         }
 
         if (startIndex == -1) return null

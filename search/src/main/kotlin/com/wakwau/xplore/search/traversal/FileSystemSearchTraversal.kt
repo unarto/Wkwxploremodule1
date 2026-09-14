@@ -1,5 +1,5 @@
 // [Jalur Class/Modul]: search/src/main/kotlin/com/wakwau/xplore/search/traversal/FileSystemSearchTraversal.kt
-// [Penjelasan]: Traversal BFS direktori filesystem secara asinkron untuk pencarian berkas mendalam menggunakan Flow dan batch callback berkala guna sinkronisasi indeks Room yang hemat memori.
+// [Penjelasan]: Traversal BFS direktori melalui DirectoryRepository secara asinkron dengan Flow dan callback batch hasil tanpa mengetahui implementasi storage.
 package com.wakwau.xplore.search.traversal
 
 import com.wakwau.xplore.core.storage.model.FileItem

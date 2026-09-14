@@ -16,6 +16,8 @@ import com.wakwau.xplore.filemanager.state.DualPaneState
 import com.wakwau.xplore.filemanager.ui.action.FileOperationActionDelegate
 import com.wakwau.xplore.fileoperations.conflict.ConflictChoice
 import com.wakwau.xplore.fileoperations.conflict.FileConflict
+import com.wakwau.xplore.fileoperations.conflict.ResolvedTransferItem
+import com.wakwau.xplore.search.sync.FileIndexSynchronizer
 import com.wakwau.xplore.fileoperations.ui.state.OperationUiState
 import com.wakwau.xplore.orchestrator.fileops.CopyOperationOrchestrator
 import com.wakwau.xplore.orchestrator.fileops.DeleteOperationOrchestrator
@@ -31,8 +33,12 @@ import kotlinx.coroutines.launch
 class AppOrchestratorViewModel(
     private val useCaseModule: FileManagerUseCaseModule,
     private val storageErrorMapper: StorageErrorMapper,
-    private val backgroundOperationClient: com.wakwau.xplore.fileoperations.client.BackgroundOperationClient
+    private val backgroundOperationClient: com.wakwau.xplore.fileoperations.client.BackgroundOperationClient,
+    private val fileIndexSynchronizer: FileIndexSynchronizer
 ) : ViewModel(), FileOperationActionDelegate {
+    private var pendingTransfers: List<ResolvedTransferItem> = emptyList()
+    private var pendingDeletes: List<StorageLocation> = emptyList()
+
     init {
         // [CopyFix]: Connect observeProgress flow to UI events berdasarkan copy.md
         viewModelScope.launch {
@@ -42,6 +48,13 @@ class AppOrchestratorViewModel(
                         internalDispatch(DualPaneEvent.OperationProgress(result.data))
                     }
                     is com.wakwau.xplore.core.storage.operation.FileOperationResult.Completed -> {
+                        try {
+                            syncCompletedOperation(result.operationType)
+                        } catch (e: Exception) {
+                            clearPendingIndexMutation()
+                            internalDispatch(DualPaneEvent.OperationFailed(e.message ?: "Index synchronization failed"))
+                            return@collect
+                        }
                         // [CopyFix]: Wiring bridge & sync ViewModel progress completion berdasarkan copy.md
                         val msgRes = when (result.operationType) {
                             com.wakwau.xplore.core.storage.operation.BackgroundOperationType.COPY -> FileOperationConstants.SUCCESS_COPY
@@ -53,9 +66,11 @@ class AppOrchestratorViewModel(
                         internalDispatch(DualPaneEvent.Refresh(com.wakwau.xplore.filemanager.state.PanelId.RIGHT))
                     }
                     is com.wakwau.xplore.core.storage.operation.FileOperationResult.Failure -> {
+                        clearPendingIndexMutation()
                         internalDispatch(DualPaneEvent.OperationFailed(result.error.name))
                     }
                     is com.wakwau.xplore.core.storage.operation.FileOperationResult.Cancelled -> {
+                        clearPendingIndexMutation()
                         internalDispatch(DualPaneEvent.OperationCancelled)
                     }
                 }
@@ -86,6 +101,7 @@ class AppOrchestratorViewModel(
         resolveTransferUseCase = useCaseModule.resolveTransferUseCase,
         storageErrorMapper = storageErrorMapper,
         dispatch = internalDispatch,
+        onEnqueued = { pendingTransfers = it },
         onShowConflict = { isMove, conflicts, dest, sources ->
             showConflict(isMove, conflicts, dest, sources)
         }
@@ -97,6 +113,7 @@ class AppOrchestratorViewModel(
         resolveTransferUseCase = useCaseModule.resolveTransferUseCase,
         storageErrorMapper = storageErrorMapper,
         dispatch = internalDispatch,
+        onEnqueued = { pendingTransfers = it },
         onShowConflict = { isMove, conflicts, dest, sources ->
             showConflict(isMove, conflicts, dest, sources)
         }
@@ -105,18 +122,49 @@ class AppOrchestratorViewModel(
     private val deleteOrchestrator = DeleteOperationOrchestrator(
         deleteFilesUseCase = useCaseModule.deleteFilesUseCase,
         storageErrorMapper = storageErrorMapper,
-        dispatch = internalDispatch
+        dispatch = internalDispatch,
+        onEnqueued = { pendingDeletes = it }
     )
 
     private val renameOrchestrator = RenameOperationOrchestrator(
         renameFileUseCase = useCaseModule.renameFileUseCase,
-        dispatch = internalDispatch
+        dispatch = internalDispatch,
+        onRenamed = { oldItem, newItem ->
+            fileIndexSynchronizer.syncRenamed(oldItem.location, newItem)
+        }
     )
 
     private val searchOrchestrator = SearchOperationOrchestrator(
         searchFilesUseCase = useCaseModule.searchFilesUseCase,
         dispatch = internalDispatch
     )
+
+    suspend fun syncCreatedItem(item: FileItem) {
+        fileIndexSynchronizer.syncCreated(item)
+    }
+
+    private suspend fun syncCompletedOperation(
+        type: com.wakwau.xplore.core.storage.operation.BackgroundOperationType
+    ) {
+        when (type) {
+            com.wakwau.xplore.core.storage.operation.BackgroundOperationType.COPY ->
+                pendingTransfers.forEach {
+                    fileIndexSynchronizer.syncCopied(it.destinationDir, it.targetLocation, it.targetName)
+                }
+            com.wakwau.xplore.core.storage.operation.BackgroundOperationType.MOVE ->
+                pendingTransfers.forEach {
+                    fileIndexSynchronizer.syncMoved(it.source, it.destinationDir, it.targetLocation, it.targetName)
+                }
+            com.wakwau.xplore.core.storage.operation.BackgroundOperationType.DELETE ->
+                pendingDeletes.forEach { fileIndexSynchronizer.removeByPrefix(it.path) }
+        }
+        clearPendingIndexMutation()
+    }
+
+    private fun clearPendingIndexMutation() {
+        pendingTransfers = emptyList()
+        pendingDeletes = emptyList()
+    }
 
     // [Jalur Class/Modul]: app/src/main/kotlin/com/wakwau/xplore/orchestrator/AppOrchestratorViewModel.kt
     // [Penjelasan]: Mengimplementasikan antarmuka FileOperationActionDelegate.dispatchEvent untuk menangani event operasi I/O dan memetakan resource ID tanpa hardcode.

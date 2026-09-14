@@ -81,6 +81,21 @@ class CrossFilesystemDirectoryTransferHelper(
         StorageBackendType.ROOT -> SuFile(source.path).isDirectory
     }
 
+    suspend fun calculateTotalSize(source: StorageLocation, sourceType: StorageBackendType): Long {
+        if (!isSourceDirectory(source, sourceType)) {
+            return when (sourceType) {
+                StorageBackendType.LOCAL -> File(source.path).length()
+                StorageBackendType.SAF -> resolveSafDocument(Uri.parse(source.path))?.length() ?: 0L
+                StorageBackendType.SHIZUKU -> getShizukuService().length(source.path)
+                StorageBackendType.ROOT -> SuFile(source.path).length()
+            }
+        }
+
+        return listSourceChildren(source, sourceType).sumOf { child ->
+            calculateTotalSize(child, sourceType)
+        }
+    }
+
     fun getSourceName(source: StorageLocation, sourceType: StorageBackendType): String = when (sourceType) {
         StorageBackendType.LOCAL -> File(source.path).name
         StorageBackendType.SAF -> resolveSafDocument(Uri.parse(source.path))?.name ?: StorageConstants.DEFAULT_UNKNOWN_FILE_NAME

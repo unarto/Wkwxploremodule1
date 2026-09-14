@@ -51,7 +51,7 @@ open class CrossFilesystemTransferBridge(
         sourceType: StorageBackendType,
         destType: StorageBackendType
     ): Flow<FileOperationProgress> = flow {
-        val totalBytes = 0L // [CopyFix]: Penghitungan ukuran silang dihapus sesuai audit codemati.md
+        val totalBytes = directoryHelper.calculateTotalSize(source, sourceType)
         var totalCopied = 0L
 
         if (totalBytes == 0L) {
@@ -65,8 +65,7 @@ open class CrossFilesystemTransferBridge(
                 source = source,
                 destination = destination,
                 sourceType = sourceType,
-                destType = destType,
-                totalBytes = totalBytes
+                destType = destType
             ) { bytes, fileName ->
                 totalCopied += bytes
                 emit(FileOperationProgress(totalCopied, totalBytes, fileName))
@@ -76,8 +75,7 @@ open class CrossFilesystemTransferBridge(
                 source = source,
                 destination = destination,
                 sourceType = sourceType,
-                destType = destType,
-                totalBytes = totalBytes
+                destType = destType
             ) { bytes, fileName ->
                 totalCopied += bytes
                 emit(FileOperationProgress(totalCopied, totalBytes, fileName))
@@ -92,7 +90,7 @@ open class CrossFilesystemTransferBridge(
         destType: StorageBackendType
     ): Flow<FileOperationProgress> = flow {
         val isSourceDir = directoryHelper.isSourceDirectory(source, sourceType)
-        val sourceSize = 0L // [CopyFix]: Penghitungan ukuran silang dihapus sesuai audit codemati.md
+        val sourceSize = directoryHelper.calculateTotalSize(source, sourceType)
 
         try {
             copyCross(source, destination, sourceType, destType).collect { progress ->
@@ -113,7 +111,6 @@ open class CrossFilesystemTransferBridge(
         destination: StorageLocation,
         sourceType: StorageBackendType,
         destType: StorageBackendType,
-        totalBytes: Long,
         onProgress: suspend (Long, String) -> Unit
     ) {
         val sourceName = directoryHelper.getSourceName(source, sourceType)
@@ -152,7 +149,6 @@ open class CrossFilesystemTransferBridge(
         destination: StorageLocation,
         sourceType: StorageBackendType,
         destType: StorageBackendType,
-        totalBytes: Long,
         onProgress: suspend (Long, String) -> Unit
     ) {
         val sourceDirName = directoryHelper.getSourceName(source, sourceType)
@@ -170,7 +166,6 @@ open class CrossFilesystemTransferBridge(
                     destination = targetDestLocation,
                     sourceType = sourceType,
                     destType = destType,
-                    totalBytes = totalBytes,
                     onProgress = onProgress
                 )
             } else {
@@ -179,7 +174,6 @@ open class CrossFilesystemTransferBridge(
                     destination = targetDestLocation,
                     sourceType = sourceType,
                     destType = destType,
-                    totalBytes = totalBytes,
                     onProgress = onProgress
                 )
             }

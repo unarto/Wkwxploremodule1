@@ -40,15 +40,11 @@ class FileCopyServiceClient(
             action = FileCopyService.ACTION_START
             putExtra(FileCopyService.KEY_OPERATION_TYPE, type.name)
             putExtra(FileCopyService.KEY_SOURCES, sourcesJson.toString())
-            // [Jalur Class/Modul]: core-worker/src/main/kotlin/com/wakwau/xplore/core/worker/client/FileCopyServiceClient.kt
-            // [Penjelasan]: Meneruskan payload list path asal dan direktori tujuan secara eksplisit ke Intent FileCopyService
-            putStringArrayListExtra("sourcePaths", ArrayList(sources.map { it.path }))
             if (destination != null) {
                 val destObj = JSONObject()
                 destObj.put(FileOperationIntentParser.KEY_PATH, destination.path)
                 destObj.put(FileOperationIntentParser.KEY_ROOT_ID, destination.rootId)
                 putExtra(FileCopyService.KEY_DESTINATION, destObj.toString())
-                putExtra("targetPath", destination.path)
             }
         }
         
@@ -79,29 +75,9 @@ class FileCopyServiceClient(
             action = FileCopyService.ACTION_START
             putExtra(FileCopyService.KEY_OPERATION_TYPE, type.name)
             putExtra(FileCopyService.KEY_RESOLVED_ITEMS, resolvedArray.toString())
-            // [Jalur Class/Modul]: core-worker/src/main/kotlin/com/wakwau/xplore/core/worker/client/FileCopyServiceClient.kt
-            // [Penjelasan]: Meneruskan payload list path asal dan direktori tujuan secara eksplisit ke Intent FileCopyService
-            putStringArrayListExtra("sourcePaths", ArrayList(resolvedItems.map { it.source.path }))
-            if (resolvedItems.isNotEmpty()) {
-                putExtra("targetPath", resolvedItems.first().destinationDir.path)
-            }
         }
 
         ContextCompat.startForegroundService(context, intent)
-    }
-
-    // [Jalur Class/Modul]: core-worker/src/main/kotlin/com/wakwau/xplore/core/worker/client/FileCopyServiceClient.kt
-    // [Penjelasan]: Helper method startCopyJob untuk mengirimkan payload berkas ke service secara langsung
-    fun startCopyJob(sourcePaths: List<String>, targetPath: String) {
-        val sources = sourcePaths.map { StorageLocation(path = it, rootId = "") }
-        val destination = StorageLocation(path = targetPath, rootId = "")
-        enqueueOperation(BackgroundOperationType.COPY, sources, destination)
-    }
-
-    // [Jalur Class/Modul]: core-worker/src/main/kotlin/com/wakwau/xplore/core/worker/client/FileCopyServiceClient.kt
-    // [Penjelasan]: Helper method execute untuk dispatching operasi penyalinan berkas
-    fun execute(sourcePaths: List<String>, targetPath: String) {
-        startCopyJob(sourcePaths, targetPath)
     }
 
     override fun cancelOperation() {

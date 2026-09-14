@@ -5,23 +5,18 @@ package com.wakwau.xplore.core.utils.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.SdCard
-import androidx.compose.material.icons.filled.SdStorage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,10 +32,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wakwau.xplore.core.utils.ui.R
-import com.wakwau.xplore.core.utils.ui.theme.DarkBorder
-import com.wakwau.xplore.core.utils.ui.theme.DarkSurfaceElevated
-import com.wakwau.xplore.core.utils.ui.theme.DarkSurfaceHighlight
-import com.wakwau.xplore.core.utils.ui.theme.XploreBlue
 import com.wakwau.xplore.core.utils.ui.theme.XploreCyan
 import com.wakwau.xplore.core.utils.ui.theme.XPloreTheme
 
