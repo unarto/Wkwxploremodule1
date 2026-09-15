@@ -13,7 +13,7 @@ sealed class OperationUiState {
     data class Confirming(
         val isMove: Boolean,
         val items: List<FileItem>,
-        val targetPath: String
+        val destination: StorageLocation
     ) : OperationUiState()
     data class ConflictResolution(
         val isMove: Boolean,

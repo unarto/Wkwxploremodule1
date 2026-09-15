@@ -7,7 +7,9 @@ import com.wakwau.xplore.fileoperations.conflict.ResolvedTransferItem
 internal sealed interface PendingIndexMutation {
     data class Transfer(
         val type: BackgroundOperationType,
-        val items: List<ResolvedTransferItem>
+        val items: List<ResolvedTransferItem>,
+        val sourcePanelId: com.wakwau.xplore.filemanager.state.PanelId? = null,
+        val markedIds: Set<String> = emptySet()
     ) : PendingIndexMutation
 
     data class Delete(val sources: List<StorageLocation>) : PendingIndexMutation
@@ -28,6 +30,8 @@ internal class PendingIndexMutations {
         }
         return if (matchesType) mutations.remove(operationId) else null
     }
+
+    fun take(operationId: String): PendingIndexMutation? = mutations.remove(operationId)
 
     fun remove(operationId: String): Boolean = mutations.remove(operationId) != null
 }

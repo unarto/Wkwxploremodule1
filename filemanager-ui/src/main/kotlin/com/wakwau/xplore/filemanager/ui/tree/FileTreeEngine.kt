@@ -21,6 +21,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
 class FileTreeEngine(
     private val listDirectoryUseCase: ListDirectoryUseCase,
     private val appPreferencesRepository: AppPreferencesRepository? = null,
@@ -154,8 +157,15 @@ class FileTreeEngine(
         }
     }
 
-    private suspend fun loadChildren(node: TreeNode<FileItem>) {
-        if (!loadingNodes.add(node.id)) return
+    private val childLoadMutex = Mutex()
+
+    suspend fun loadSelectionChildren(node: TreeNode<FileItem>): Boolean {
+        if (node.hasChildren) return true
+        return loadChildren(node)
+    }
+
+    private suspend fun loadChildren(node: TreeNode<FileItem>): Boolean = childLoadMutex.withLock {
+        if (!loadingNodes.add(node.id)) return@withLock false
         try {
             when (val result = listDirectoryUseCase(node.data.location)) {
                 is FileOperationResult.Success -> {
@@ -167,20 +177,23 @@ class FileTreeEngine(
                     
                     sortedItems.forEach { node.addChild(it) }
                     treeState.expand(node)
+                    true
                 }
                 is FileOperationResult.Failure -> {
                     _errorState.value = result.error.name
+                    false
                 }
                 is FileOperationResult.Cancelled -> {
-                    // Ignore
+                    throw CancellationException("Child listing cancelled")
                 }
                 is FileOperationResult.Completed -> {
-                    // No-op
+                    false
                 }
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             _errorState.value = e.message
+            false
         } finally {
             loadingNodes.remove(node.id)
         }
@@ -207,19 +220,27 @@ class FileTreeEngine(
         return TreeScopeCalculator.getBorderPosition(index, range)
     }
 
-    fun getSelectedItems(selectedIds: Set<String>): List<FileItem> {
-        val selectedItems = mutableListOf<FileItem>()
-        fun traverse(nodes: List<TreeNode<FileItem>>) {
-            for (node in nodes) {
-                if (!node.isRoot && (selectedIds.contains(node.data.location.path))) {
-                    selectedItems.add(node.data)
-                } else {
-                    traverse(node.children)
-                }
-            }
+    fun containsNode(target: TreeNode<FileItem>): Boolean {
+        val pending = ArrayDeque<TreeNode<FileItem>>()
+        treeState.roots.forEach { pending.addLast(it) }
+        while (pending.isNotEmpty()) {
+            val node = pending.removeFirst()
+            if (node === target) return true
+            node.children.forEach { pending.addLast(it) }
         }
-        traverse(treeState.roots)
-        return selectedItems
+        return false
+    }
+
+    fun selectionCandidates(): List<FileItem> {
+        val result = mutableListOf<FileItem>()
+        val pending = ArrayDeque<TreeNode<FileItem>>()
+        treeState.roots.forEach { pending.addLast(it) }
+        while (pending.isNotEmpty()) {
+            val node = pending.removeFirst()
+            if (!node.isRoot) result.add(node.data)
+            node.children.forEach { pending.addLast(it) }
+        }
+        return result
     }
 
     fun updateSearchResults(keyword: String, items: List<FileItem>) {

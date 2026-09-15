@@ -8,8 +8,9 @@ import com.wakwau.xplore.filemanager.event.DualPaneEvent
 import com.wakwau.xplore.filemanager.state.DualPaneState
 
 interface FileOperationActionDelegate {
-    fun requestCopy(state: DualPaneState, items: List<FileItem>, targetPath: String)
-    fun requestMove(state: DualPaneState, items: List<FileItem>, targetPath: String)
+    fun requestCopy(state: DualPaneState, items: List<FileItem>, destination: com.wakwau.xplore.core.storage.model.StorageLocation)
+    fun requestMove(state: DualPaneState, items: List<FileItem>, destination: com.wakwau.xplore.core.storage.model.StorageLocation)
+    fun normalizeMarkedItems(ids: Set<String>, candidates: List<FileItem>): com.wakwau.xplore.core.storage.operation.MarkedOperationSnapshot
     fun requestDelete(state: DualPaneState, items: List<FileItem>)
     fun requestRename(state: DualPaneState, item: FileItem, newName: String)
     fun requestSearch(query: FileSearchQuery)

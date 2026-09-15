@@ -29,6 +29,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import com.wakwau.xplore.core.storage.operation.BackgroundOperationEvent
+import com.wakwau.xplore.core.storage.operation.FileOperationItemStatus
+import com.wakwau.xplore.core.storage.model.isSameOrDescendantOf
+import com.wakwau.xplore.filemanager.state.PanelId
 
 class AppOrchestratorViewModel(
     private val useCaseModule: FileManagerUseCaseModule,
@@ -37,41 +43,46 @@ class AppOrchestratorViewModel(
     private val fileIndexSynchronizer: FileIndexSynchronizer
 ) : ViewModel(), FileOperationActionDelegate {
     private val pendingIndexMutations = PendingIndexMutations()
+    private var activeOperationId: String? = null
+    private var planningJob: Job? = null
+    private var operationPanelId: PanelId = PanelId.LEFT
+    private var operationMarkedIds: Set<String> = emptySet()
 
     init {
         // [CopyFix]: Connect observeProgress flow to UI events berdasarkan copy.md
         viewModelScope.launch {
             backgroundOperationClient.observeProgress().collect { event ->
                 val result = event.result
-                when (result) {
-                    is com.wakwau.xplore.core.storage.operation.FileOperationResult.Success -> {
-                        internalDispatch(DualPaneEvent.OperationProgress(result.data))
-                    }
-                    is com.wakwau.xplore.core.storage.operation.FileOperationResult.Completed -> {
-                        try {
-                            if (!syncCompletedOperation(event.operationId, result.operationType)) return@collect
-                        } catch (e: Exception) {
-                            internalDispatch(DualPaneEvent.OperationFailed(e.message ?: "Index synchronization failed"))
-                            return@collect
-                        }
-                        // [CopyFix]: Wiring bridge & sync ViewModel progress completion berdasarkan copy.md
-                        val msgRes = when (result.operationType) {
+                if (result is com.wakwau.xplore.core.storage.operation.FileOperationResult.Success) {
+                    if (event.operationId == activeOperationId) internalDispatch(DualPaneEvent.OperationProgress(result.data))
+                    return@collect
+                }
+                var syncFailure: Exception? = null
+                try {
+                    reconcileOperation(event)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    syncFailure = error
+                } finally {
+                    internalDispatch(DualPaneEvent.Refresh(PanelId.LEFT))
+                    internalDispatch(DualPaneEvent.Refresh(PanelId.RIGHT))
+                }
+                if (event.operationId != activeOperationId) return@collect
+                activeOperationId = null
+                when {
+                    syncFailure != null -> internalDispatch(DualPaneEvent.OperationFailed(syncFailure.message ?: "Index synchronization failed"))
+                    result is com.wakwau.xplore.core.storage.operation.FileOperationResult.Completed -> {
+                        val message = when (result.operationType) {
                             com.wakwau.xplore.core.storage.operation.BackgroundOperationType.COPY -> FileOperationConstants.SUCCESS_COPY
                             com.wakwau.xplore.core.storage.operation.BackgroundOperationType.MOVE -> FileOperationConstants.SUCCESS_MOVE
                             com.wakwau.xplore.core.storage.operation.BackgroundOperationType.DELETE -> FileOperationConstants.SUCCESS_DELETE
                         }
-                        internalDispatch(DualPaneEvent.OperationSuccess(msgRes))
-                        internalDispatch(DualPaneEvent.Refresh(com.wakwau.xplore.filemanager.state.PanelId.LEFT))
-                        internalDispatch(DualPaneEvent.Refresh(com.wakwau.xplore.filemanager.state.PanelId.RIGHT))
+                        internalDispatch(DualPaneEvent.OperationSuccess(message))
                     }
-                    is com.wakwau.xplore.core.storage.operation.FileOperationResult.Failure -> {
-                        pendingIndexMutations.remove(event.operationId)
+                    result is com.wakwau.xplore.core.storage.operation.FileOperationResult.Failure ->
                         internalDispatch(DualPaneEvent.OperationFailed(result.error.name))
-                    }
-                    is com.wakwau.xplore.core.storage.operation.FileOperationResult.Cancelled -> {
-                        pendingIndexMutations.remove(event.operationId)
-                        internalDispatch(DualPaneEvent.OperationCancelled)
-                    }
+                    else -> internalDispatch(DualPaneEvent.OperationCancelled)
                 }
             }
         }
@@ -101,11 +112,14 @@ class AppOrchestratorViewModel(
         storageErrorMapper = storageErrorMapper,
         dispatch = internalDispatch,
         onEnqueued = { operationId, items ->
+            activeOperationId = operationId
             pendingIndexMutations.put(
                 operationId,
                 PendingIndexMutation.Transfer(
                     com.wakwau.xplore.core.storage.operation.BackgroundOperationType.COPY,
-                    items
+                    items,
+                    operationPanelId,
+                    operationMarkedIds
                 )
             )
         },
@@ -121,11 +135,14 @@ class AppOrchestratorViewModel(
         storageErrorMapper = storageErrorMapper,
         dispatch = internalDispatch,
         onEnqueued = { operationId, items ->
+            activeOperationId = operationId
             pendingIndexMutations.put(
                 operationId,
                 PendingIndexMutation.Transfer(
                     com.wakwau.xplore.core.storage.operation.BackgroundOperationType.MOVE,
-                    items
+                    items,
+                    operationPanelId,
+                    operationMarkedIds
                 )
             )
         },
@@ -139,6 +156,7 @@ class AppOrchestratorViewModel(
         storageErrorMapper = storageErrorMapper,
         dispatch = internalDispatch,
         onEnqueued = { operationId, sources ->
+            activeOperationId = operationId
             pendingIndexMutations.put(operationId, PendingIndexMutation.Delete(sources))
         }
     )
@@ -160,27 +178,52 @@ class AppOrchestratorViewModel(
         fileIndexSynchronizer.syncCreated(item)
     }
 
-    private suspend fun syncCompletedOperation(
-        operationId: String,
-        type: com.wakwau.xplore.core.storage.operation.BackgroundOperationType
-    ): Boolean {
-        when (val mutation = pendingIndexMutations.take(operationId, type)) {
-            is PendingIndexMutation.Transfer -> when (type) {
-                com.wakwau.xplore.core.storage.operation.BackgroundOperationType.COPY -> mutation.items.forEach {
-                    fileIndexSynchronizer.syncCopied(it.destinationDir, it.targetLocation, it.targetName)
+    private suspend fun reconcileOperation(event: BackgroundOperationEvent) {
+        val mutation = pendingIndexMutations.take(event.operationId) ?: return
+        var firstFailure: Exception? = null
+        for (outcome in event.outcomes) {
+            val completed = outcome.status == FileOperationItemStatus.COMPLETED
+            if (mutation is PendingIndexMutation.Transfer) {
+                val item = mutation.items.firstOrNull { it.source == outcome.source } ?: continue
+                if (completed && mutation.sourcePanelId != null) {
+                    val cleared = mutation.markedIds.filterTo(mutableSetOf()) { path ->
+                        StorageLocation(path, item.source.rootId).isSameOrDescendantOf(item.source)
+                    }
+                    internalDispatch(DualPaneEvent.RemoveSelectedItems(mutation.sourcePanelId, cleared))
                 }
-                com.wakwau.xplore.core.storage.operation.BackgroundOperationType.MOVE -> mutation.items.forEach {
-                    fileIndexSynchronizer.syncMoved(it.source, it.destinationDir, it.targetLocation, it.targetName)
+                if (!completed && !outcome.destinationCommitted) continue
+                try {
+                    if (completed && mutation.type == com.wakwau.xplore.core.storage.operation.BackgroundOperationType.MOVE) {
+                        fileIndexSynchronizer.syncMoved(item.source, item.destinationDir, item.targetLocation, item.targetName)
+                    } else {
+                        fileIndexSynchronizer.syncCopied(item.destinationDir, item.targetLocation, item.targetName)
+                        if (mutation.type == com.wakwau.xplore.core.storage.operation.BackgroundOperationType.MOVE) {
+                            val parent = requireNotNull(useCaseModule.getParentLocationUseCase(item.source)) {
+                                "Cannot reconcile remaining source without its parent"
+                            }
+                            fileIndexSynchronizer.syncRemainingSource(item.source, parent, item.originalName)
+                        }
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (firstFailure == null) firstFailure = error
                 }
-                com.wakwau.xplore.core.storage.operation.BackgroundOperationType.DELETE -> Unit
+            } else if (mutation is PendingIndexMutation.Delete && completed) {
+                try {
+                    fileIndexSynchronizer.removeByPrefix(outcome.source.path)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (firstFailure == null) firstFailure = error
+                }
             }
-            is PendingIndexMutation.Delete -> if (type == com.wakwau.xplore.core.storage.operation.BackgroundOperationType.DELETE) {
-                mutation.sources.forEach { fileIndexSynchronizer.removeByPrefix(it.path) }
-            }
-            null -> return false
         }
-        return true
+        firstFailure?.let { throw it }
     }
+
+    override fun normalizeMarkedItems(ids: Set<String>, candidates: List<FileItem>) =
+        com.wakwau.xplore.fileoperations.selection.NormalizeMarkedItems(ids, candidates)
 
     // [Jalur Class/Modul]: app/src/main/kotlin/com/wakwau/xplore/orchestrator/AppOrchestratorViewModel.kt
     // [Penjelasan]: Mengimplementasikan antarmuka FileOperationActionDelegate.dispatchEvent untuk menangani event operasi I/O dan memetakan resource ID tanpa hardcode.
@@ -220,14 +263,23 @@ class AppOrchestratorViewModel(
             is DualPaneEvent.OperationCancelled -> {
                 _operationState.value = OperationUiState.Cancelled
             }
+            is DualPaneEvent.CancelOperationRequested -> {
+                planningJob?.cancel()
+                activeOperationId?.let { backgroundOperationClient.cancelOperation(it) }
+                    ?: run { _operationState.value = OperationUiState.Cancelled }
+            }
             is DualPaneEvent.ClearOperationState -> {
+                planningJob?.cancel()
                 _operationState.value = OperationUiState.Idle
             }
             is DualPaneEvent.ShowOperationConfirmation -> {
+                planningJob?.cancel()
+                operationPanelId = event.sourcePanelId
+                operationMarkedIds = event.markedIds
                 _operationState.value = OperationUiState.Confirming(
                     isMove = event.isMove,
                     items = event.items,
-                    targetPath = event.targetPath
+                    destination = event.destination
                 )
             }
             is DualPaneEvent.SearchIconClicked -> {
@@ -267,15 +319,17 @@ class AppOrchestratorViewModel(
         }
     }
 
-    override fun requestCopy(state: DualPaneState, items: List<FileItem>, targetPath: String) {
-        viewModelScope.launch {
-            copyOrchestrator.execute(state, items, targetPath)
+    override fun requestCopy(state: DualPaneState, items: List<FileItem>, destination: StorageLocation) {
+        planningJob?.cancel()
+        planningJob = viewModelScope.launch {
+            copyOrchestrator.execute(state.copy(activePanelId = operationPanelId), items, destination.path, destination.rootId)
         }
     }
 
-    override fun requestMove(state: DualPaneState, items: List<FileItem>, targetPath: String) {
-        viewModelScope.launch {
-            moveOrchestrator.execute(state, items, targetPath)
+    override fun requestMove(state: DualPaneState, items: List<FileItem>, destination: StorageLocation) {
+        planningJob?.cancel()
+        planningJob = viewModelScope.launch {
+            moveOrchestrator.execute(state.copy(activePanelId = operationPanelId), items, destination.path, destination.rootId)
         }
     }
 
@@ -297,23 +351,26 @@ class AppOrchestratorViewModel(
         }
     }
 
-    fun resolveCopyConflict(
-        sources: List<StorageLocation>,
-        dest: StorageLocation,
-        decisions: Map<StorageLocation, ConflictChoice>
-    ) {
-        viewModelScope.launch {
-            copyOrchestrator.executeResolved(sources, dest, decisions)
+    fun resolveConflictDecision(choice: ConflictChoice, applyToAll: Boolean) {
+        val current = _operationState.value as? OperationUiState.ConflictResolution ?: return
+        val conflict = current.currentConflict ?: return
+        if (conflict.isBatchCollision && choice == ConflictChoice.OVERWRITE) return
+        val decisions = current.resolvedDecisions.toMutableMap()
+        for (candidate in current.pendingConflicts.drop(current.currentConflictIndex)) {
+            if (candidate.isBatchCollision && choice == ConflictChoice.OVERWRITE) continue
+            decisions[candidate.source] = choice
+            if (!applyToAll) break
         }
-    }
-
-    fun resolveMoveConflict(
-        sources: List<StorageLocation>,
-        dest: StorageLocation,
-        decisions: Map<StorageLocation, ConflictChoice>
-    ) {
-        viewModelScope.launch {
-            moveOrchestrator.executeResolved(sources, dest, decisions)
+        val next = current.pendingConflicts.indexOfFirst { it.source !in decisions }
+        if (next >= 0) {
+            _operationState.value = current.copy(currentConflictIndex = next, resolvedDecisions = decisions)
+            return
+        }
+        _operationState.value = current.copy(resolvedDecisions = decisions)
+        planningJob?.cancel()
+        planningJob = viewModelScope.launch {
+            if (current.isMove) moveOrchestrator.executeResolved(current.allSources, current.destinationDir, decisions)
+            else copyOrchestrator.executeResolved(current.allSources, current.destinationDir, decisions)
         }
     }
 
@@ -323,7 +380,12 @@ class AppOrchestratorViewModel(
         destinationDir: StorageLocation,
         allSources: List<StorageLocation>
     ) {
+        val previous = _operationState.value as? OperationUiState.ConflictResolution
+        val decisions = if (previous != null && previous.allSources == allSources && previous.destinationDir == destinationDir && previous.isMove == isMove) {
+            previous.resolvedDecisions - conflicts.map { it.source }.toSet()
+        } else emptyMap()
         _operationState.value = OperationUiState.ConflictResolution(
+            resolvedDecisions = decisions,
             isMove = isMove,
             pendingConflicts = conflicts,
             destinationDir = destinationDir,

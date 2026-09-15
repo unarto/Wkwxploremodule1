@@ -16,8 +16,9 @@ sealed class DualPaneEvent {
     
     // Selection
     data class ToggleSelection(val panelId: PanelId, val itemId: String) : DualPaneEvent()
-    data class SetSelectedItems(val panelId: PanelId, val itemIds: Set<String>) : DualPaneEvent()
+    data class SetSelectedItems(val panelId: PanelId, val itemIds: Set<String>, val expectedRevision: Long? = null) : DualPaneEvent()
     data class ClearSelection(val panelId: PanelId) : DualPaneEvent()
+    data class RemoveSelectedItems(val panelId: PanelId, val itemIds: Set<String>) : DualPaneEvent()
     
     // Sorting & Preferences
     
@@ -32,9 +33,9 @@ sealed class DualPaneEvent {
     data class Refresh(val panelId: PanelId) : DualPaneEvent()
 
     // Data Loading Result (From UseCase back to UI state)
-    data class DirectoryLoaded(val panelId: PanelId, val location: StorageLocation, val items: List<FileItem>) : DualPaneEvent()
-    data class DirectoryLoadFailed(val panelId: PanelId, val error: String) : DualPaneEvent()
-    data class LoadingStarted(val panelId: PanelId) : DualPaneEvent()
+    data class DirectoryLoaded(val panelId: PanelId, val location: StorageLocation, val items: List<FileItem>, val requestId: Long? = null) : DualPaneEvent()
+    data class DirectoryLoadFailed(val panelId: PanelId, val error: String, val requestId: Long? = null) : DualPaneEvent()
+    data class LoadingStarted(val panelId: PanelId, val requestId: Long? = null) : DualPaneEvent()
     
     // Dialog triggers
     data class ShowCreateDirectoryDialog(val parentLocation: StorageLocation) : DualPaneEvent()
@@ -43,8 +44,8 @@ sealed class DualPaneEvent {
     object DismissInputDialog : DualPaneEvent()
 
     // Operation intents
-    data class ExecuteConfirmedCopy(val items: List<FileItem>, val targetPath: String) : DualPaneEvent()
-    data class ExecuteConfirmedMove(val items: List<FileItem>, val targetPath: String) : DualPaneEvent()
+    data class ExecuteConfirmedCopy(val items: List<FileItem>, val destination: StorageLocation) : DualPaneEvent()
+    data class ExecuteConfirmedMove(val items: List<FileItem>, val destination: StorageLocation) : DualPaneEvent()
     data class DeleteSelected(val items: List<FileItem>) : DualPaneEvent()
     data class RenameItem(val item: FileItem, val newName: String) : DualPaneEvent()
     data class CreateDirectory(val parentLocation: StorageLocation, val name: String) : DualPaneEvent()
@@ -54,7 +55,9 @@ sealed class DualPaneEvent {
     data class ShowOperationConfirmation(
         val isMove: Boolean,
         val items: List<FileItem>,
-        val targetPath: String
+        val destination: StorageLocation,
+        val sourcePanelId: PanelId,
+        val markedIds: Set<String>
     ) : DualPaneEvent()
     object CancelOperationRequested : DualPaneEvent()
     data class OperationProgress(val progress: com.wakwau.xplore.core.storage.operation.FileOperationProgress) : DualPaneEvent()

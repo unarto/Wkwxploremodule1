@@ -87,10 +87,16 @@ class FileCopyServiceClient(
     }
 
     override fun cancelOperation() {
-        val intent = Intent(context, FileCopyService::class.java).apply {
+        context.startService(Intent(context, FileCopyService::class.java).apply {
             action = FileCopyService.ACTION_CANCEL
-        }
-        context.startService(intent)
+        })
+    }
+
+    override fun cancelOperation(operationId: String) {
+        context.startService(Intent(context, FileCopyService::class.java).apply {
+            action = FileCopyService.ACTION_CANCEL
+            putExtra(FileCopyService.KEY_OPERATION_ID, operationId)
+        })
     }
 
     override fun observeProgress(): Flow<BackgroundOperationEvent> {

@@ -2,87 +2,107 @@ package com.wakwau.xplore.fileoperations.executor
 
 import com.wakwau.xplore.core.storage.constant.StorageConstants
 import com.wakwau.xplore.core.storage.model.StorageLocation
-import com.wakwau.xplore.core.storage.operation.BackgroundOperationType
-import com.wakwau.xplore.core.storage.operation.FileOperationError
-import com.wakwau.xplore.core.storage.operation.FileOperationProgress
-import com.wakwau.xplore.core.storage.operation.FileOperationResult
+import com.wakwau.xplore.core.storage.model.isSameOrDescendantOf
+import com.wakwau.xplore.core.storage.operation.*
 import com.wakwau.xplore.core.storage.repository.FileRepository
 import com.wakwau.xplore.fileoperations.conflict.ConflictChoice
-import com.wakwau.xplore.fileoperations.conflict.ResolvedTransferItem
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
-class FileOperationExecutor(
-    private val fileRepository: FileRepository
-) {
+class FileOperationExecutor(private val fileRepository: FileRepository) {
     suspend fun execute(
         request: FileOperationRequest,
+        onItemOutcome: suspend (FileOperationItemOutcome) -> Unit = {},
         onProgress: suspend (FileOperationResult<FileOperationProgress>) -> Unit
     ): FileOperationResult<FileOperationProgress>? {
-        val resolvedItems = request.resolvedItems
-        return if (resolvedItems != null) {
-            executeResolved(request.type, resolvedItems, onProgress)
-        } else {
-            executeSources(request.type, request.sources, request.destination, onProgress)
-        }
-    }
-
-    private suspend fun executeSources(
-        type: BackgroundOperationType,
-        sources: List<StorageLocation>,
-        destination: StorageLocation?,
-        onProgress: suspend (FileOperationResult<FileOperationProgress>) -> Unit
-    ): FileOperationResult<FileOperationProgress>? {
-        if (type != BackgroundOperationType.DELETE && destination == null) {
+        val resolved = request.resolvedItems
+        if (request.type != BackgroundOperationType.DELETE && resolved == null && request.destination == null) {
             return FileOperationResult.Failure(FileOperationError.INVALID_LOCATION)
         }
-
-        var deletedCount = 0L
-        for (source in sources) {
-            currentCoroutineContext().ensureActive()
-            if (type == BackgroundOperationType.DELETE) {
-                when (val result = fileRepository.delete(source)) {
-                    is FileOperationResult.Success -> {
-                        deletedCount++
-                        onProgress(
-                            FileOperationResult.Success(
-                                FileOperationProgress(
-                                    deletedCount,
-                                    sources.size.toLong(),
-                                    source.path.trimEnd('/').substringAfterLast('/')
-                                )
-                            )
-                        )
-                    }
-                    is FileOperationResult.Failure -> return result
-                    FileOperationResult.Cancelled -> return FileOperationResult.Cancelled
-                    is FileOperationResult.Completed -> return FileOperationResult.Failure(FileOperationError.UNKNOWN)
-                }
-                continue
+        val entries = if (resolved != null) {
+            require(request.type != BackgroundOperationType.DELETE)
+            val transfers = resolved.filter { it.choice != ConflictChoice.SKIP }
+            require(transfers.map { it.source }.distinct().size == transfers.size) { "Duplicate source" }
+            require(transfers.map { it.targetLocation.path.lowercase(java.util.Locale.ROOT) }.distinct().size == transfers.size) {
+                "Batch targets require conflict resolution"
             }
-
-            val target = createTargetLocation(source, requireNotNull(destination))
-            val terminal = executeTransfer(type, source, target, onProgress)
-            if (terminal != null) return terminal
+            transfers.forEach {
+                require(!it.targetLocation.isSameOrDescendantOf(it.source) || (!it.isDirectory && !it.source.isSameOrDescendantOf(it.targetLocation))) { "Invalid transfer target" }
+            }
+            resolved.map { Entry(it.source, it.targetLocation, it.choice == ConflictChoice.SKIP) }
+        } else request.sources.distinct().map { source ->
+            Entry(source, request.destination?.let { createTargetLocation(source, it) }, false)
         }
-        return null
-    }
-
-    private suspend fun executeResolved(
-        type: BackgroundOperationType,
-        resolvedItems: List<ResolvedTransferItem>,
-        onProgress: suspend (FileOperationResult<FileOperationProgress>) -> Unit
-    ): FileOperationResult<FileOperationProgress>? {
-        if (type == BackgroundOperationType.DELETE) {
-            return FileOperationResult.Failure(FileOperationError.INVALID_LOCATION)
+        if (request.type != BackgroundOperationType.DELETE) {
+            val targets = entries.filterNot { it.skip }.map { requireNotNull(it.target) }
+            require(targets.map { it.path.lowercase(java.util.Locale.ROOT) }.distinct().size == targets.size) {
+                "Batch targets require conflict resolution before execution"
+            }
+            entries.filterNot { it.skip }.forEach {
+                val target = requireNotNull(it.target)
+                require(!(target.isSameOrDescendantOf(it.source) && it.source.isSameOrDescendantOf(target))) {
+                    "Source and final target must differ"
+                }
+            }
         }
-        for (item in resolvedItems) {
-            currentCoroutineContext().ensureActive()
-            if (item.choice == ConflictChoice.SKIP) continue
-            val terminal = executeTransfer(type, item.source, item.targetLocation, onProgress)
-            if (terminal != null) return terminal
+        var nextIndex = 0
+        var deletedCount = 0L
+        suspend fun record(entry: Entry, status: FileOperationItemStatus, committed: Boolean = false) =
+            withContext(NonCancellable) {
+                onItemOutcome(FileOperationItemOutcome(entry.source, entry.target, status, committed))
+            }
+        try {
+            for ((index, entry) in entries.withIndex()) {
+                nextIndex = index
+                if (entry.skip) {
+                    record(entry, FileOperationItemStatus.SKIPPED)
+                    nextIndex = index + 1
+                    continue
+                }
+                try {
+                    currentCoroutineContext().ensureActive()
+                    val failure = if (request.type == BackgroundOperationType.DELETE) {
+                        when (val result = fileRepository.delete(entry.source)) {
+                            is FileOperationResult.Success -> null
+                            is FileOperationResult.Failure -> result
+                            FileOperationResult.Cancelled -> FileOperationResult.Cancelled
+                            is FileOperationResult.Completed -> FileOperationResult.Failure(FileOperationError.UNKNOWN)
+                        }
+                    } else {
+                        executeTransfer(request.type, entry.source, requireNotNull(entry.target), onProgress)
+                    }
+                    if (failure != null) {
+                        record(entry, if (failure == FileOperationResult.Cancelled) FileOperationItemStatus.CANCELLED else FileOperationItemStatus.FAILED)
+                        nextIndex = index + 1
+                        return failure
+                    }
+                    record(entry, FileOperationItemStatus.COMPLETED, request.type != BackgroundOperationType.DELETE)
+                    nextIndex = index + 1
+                    if (request.type == BackgroundOperationType.DELETE) {
+                        deletedCount++
+                        onProgress(FileOperationResult.Success(FileOperationProgress(
+                            deletedCount, entries.size.toLong(), entry.source.path.trimEnd('/').substringAfterLast('/')
+                        )))
+                    }
+                } catch (error: CancellationException) {
+                    if (nextIndex == index) record(entry, FileOperationItemStatus.CANCELLED, error is CommittedDestination)
+                    nextIndex = index + 1
+                    throw error
+                } catch (error: Exception) {
+                    if (nextIndex == index) record(entry, FileOperationItemStatus.FAILED, error is CommittedDestination)
+                    nextIndex = index + 1
+                    return FileOperationResult.Failure(FileOperationError.UNKNOWN)
+                }
+            }
+            return null
+        } finally {
+            for (entry in entries.drop(nextIndex)) {
+                record(entry, if (entry.skip) FileOperationItemStatus.SKIPPED else FileOperationItemStatus.NOT_STARTED)
+            }
         }
-        return null
     }
 
     private suspend fun executeTransfer(
@@ -94,32 +114,28 @@ class FileOperationExecutor(
         val flow = when (type) {
             BackgroundOperationType.COPY -> fileRepository.copy(source, target)
             BackgroundOperationType.MOVE -> fileRepository.move(source, target)
-            BackgroundOperationType.DELETE -> return FileOperationResult.Failure(FileOperationError.INVALID_LOCATION)
+            BackgroundOperationType.DELETE -> error("Delete is not a transfer")
         }
         var terminal: FileOperationResult<FileOperationProgress>? = null
         flow.collect { result ->
             when (result) {
-                is FileOperationResult.Success -> onProgress(result)
-                is FileOperationResult.Failure -> terminal = result
-                FileOperationResult.Cancelled -> terminal = FileOperationResult.Cancelled
+                is FileOperationResult.Success -> if (terminal == null) onProgress(result)
+                is FileOperationResult.Failure -> if (terminal == null) terminal = result
+                FileOperationResult.Cancelled -> if (terminal == null) terminal = FileOperationResult.Cancelled
                 is FileOperationResult.Completed -> Unit
             }
         }
         return terminal
     }
 
+    private data class Entry(val source: StorageLocation, val target: StorageLocation?, val skip: Boolean)
+
     private fun createTargetLocation(source: StorageLocation, destination: StorageLocation): StorageLocation {
-        val sourceName = source.path.trimEnd('/').substringAfterLast('/')
-        return if (destination.path.startsWith(StorageConstants.CONTENT_SCHEME_PREFIX)) {
-            StorageLocation(
-                path = "${destination.path.substringBefore('#')}#$sourceName",
-                rootId = destination.rootId
-            )
-        } else {
-            StorageLocation(
-                path = "${destination.path.trimEnd('/')}/$sourceName",
-                rootId = destination.rootId
-            )
-        }
+        val name = source.path.trimEnd('/').substringAfterLast('/')
+        return StorageLocation(
+            if (destination.path.startsWith(StorageConstants.CONTENT_SCHEME_PREFIX)) "${destination.path.substringBefore('#')}#$name"
+            else "${destination.path.trimEnd('/')}/$name",
+            destination.rootId
+        )
     }
 }

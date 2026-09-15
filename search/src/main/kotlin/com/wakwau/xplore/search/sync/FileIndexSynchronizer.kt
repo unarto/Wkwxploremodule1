@@ -62,6 +62,16 @@ class FileIndexSynchronizer(
         )
     }
 
+    suspend fun syncRemainingSource(source: StorageLocation, parent: StorageLocation, sourceName: String) {
+        val remaining = findDestinationItem(parent, source, sourceName)
+        currentCoroutineContext().ensureActive()
+        if (remaining == null) {
+            fileIndexRepository.removeIndexByPrefix(source.path)
+        } else {
+            fileIndexRepository.replacePrefixIndexBatched(source.path, indexSubtreeBatches(remaining))
+        }
+    }
+
     suspend fun syncRenamed(oldLocation: StorageLocation, renamedItem: FileItem) {
         currentCoroutineContext().ensureActive()
         fileIndexRepository.replacePrefixIndexBatched(
@@ -118,7 +128,7 @@ class FileIndexSynchronizer(
         }
         is FileOperationResult.Failure -> error("Unable to read copied destination: ${result.error}")
         FileOperationResult.Cancelled -> throw CancellationException("Destination index lookup was cancelled")
-        is FileOperationResult.Completed -> null
+        is FileOperationResult.Completed -> error("Unexpected completion during index lookup")
     }
 
     private fun createIndexItem(item: FileItem): FileIndexItem {

@@ -107,6 +107,13 @@ class DualPaneViewModel(
         }
     }
 
+    fun operationSnapshot(panel: com.wakwau.xplore.filemanager.state.PanelState):
+        com.wakwau.xplore.core.storage.operation.MarkedOperationSnapshot {
+        val candidates = treeNavigationAdapter.getEngine(panel.id).selectionCandidates()
+        return requireNotNull(actionDelegate) { "Operation delegate is unavailable" }
+            .normalizeMarkedItems(panel.selectedItemIds, candidates)
+    }
+
     fun checkPermission() {
         stateHolder.checkPermission()
     }
@@ -140,11 +147,17 @@ class DualPaneViewModel(
             is DualPaneEvent.NavigateUp -> {
                 navigationHandler.handleNavigateUp(stateHolder.state.value, event.panelId)
             }
+            is DualPaneEvent.CancelOperationRequested -> {
+                actionDelegate?.dispatchEvent(event)
+            }
+            is DualPaneEvent.ShowOperationConfirmation -> {
+                actionDelegate?.dispatchEvent(event)
+            }
             is DualPaneEvent.ExecuteConfirmedCopy -> {
-                actionDelegate?.requestCopy(state.value, event.items, event.targetPath)
+                actionDelegate?.requestCopy(state.value, event.items, event.destination)
             }
             is DualPaneEvent.ExecuteConfirmedMove -> {
-                actionDelegate?.requestMove(state.value, event.items, event.targetPath)
+                actionDelegate?.requestMove(state.value, event.items, event.destination)
             }
             is DualPaneEvent.DeleteSelected -> {
                 _dialogUiState.value = FileDialogUiState.None

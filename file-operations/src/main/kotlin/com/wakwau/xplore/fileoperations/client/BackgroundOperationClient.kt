@@ -12,5 +12,6 @@ interface BackgroundOperationClient {
     fun enqueueOperation(type: BackgroundOperationType, sources: List<StorageLocation>, destination: StorageLocation? = null): String
     fun enqueueResolvedOperation(type: BackgroundOperationType, resolvedItems: List<ResolvedTransferItem>): String
     fun cancelOperation()
+    fun cancelOperation(operationId: String) = cancelOperation()
     fun observeProgress(): Flow<BackgroundOperationEvent>
 }

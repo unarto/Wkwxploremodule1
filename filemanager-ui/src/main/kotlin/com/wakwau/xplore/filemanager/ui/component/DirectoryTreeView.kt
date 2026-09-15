@@ -7,6 +7,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.storage.model.FileType
@@ -28,7 +31,7 @@ fun DirectoryTreeView(
     treeAdapter: TreeNavigationAdapter,
     onItemClick: (FileItem) -> Unit,
     onItemLongClick: (FileItem) -> Unit,
-    onSelectionChange: (Set<String>) -> Unit,
+    onSelectionChange: (Set<String>, Long) -> Unit,
     onRetry: () -> Unit,
     onNavigate: (StorageLocation) -> Unit = {},
     onIconClick: (FileItem) -> Unit = {},
@@ -40,24 +43,27 @@ fun DirectoryTreeView(
     val selectedPath by engine.selectedPath.collectAsStateWithLifecycle()
     val visibleNodes by engine.treeState.visibleNodes.collectAsStateWithLifecycle()
     val treeSelectionHandler = remember { TreeSelectionHandler() }
+    val latestPanel by rememberUpdatedState(panelState)
+    val latestSelectionChange by rememberUpdatedState(onSelectionChange)
+    var selectionIntent by remember(engine) { mutableStateOf(0L) }
 
     val interaction = remember(panelState.id, treeAdapter, coroutineScope, onNavigate, onItemClick, onItemLongClick) {
         object : TreeInteraction<FileItem> {
             override fun onToggle(node: TreeNode<FileItem>) {
                 treeAdapter.setSelectedPath(panelState.id, node.data.location.path)
-                onNavigate(node.data.location)
+                if (node.data.type == FileType.DIRECTORY) onNavigate(node.data.location)
                 coroutineScope.launch {
                     treeAdapter.toggleNode(panelState.id, node)
                 }
             }
             override fun onNodeClick(node: TreeNode<FileItem>) {
                 treeAdapter.setSelectedPath(panelState.id, node.data.location.path)
-                onNavigate(node.data.location)
+                if (node.data.type == FileType.DIRECTORY) onNavigate(node.data.location)
                 onItemClick(node.data)
             }
             override fun onNodeLongClick(node: TreeNode<FileItem>) {
                 treeAdapter.setSelectedPath(panelState.id, node.data.location.path)
-                onNavigate(node.data.location)
+                if (node.data.type == FileType.DIRECTORY) onNavigate(node.data.location)
                 onItemLongClick(node.data)
             }
         }
@@ -96,7 +102,7 @@ fun DirectoryTreeView(
                 selectionState = selectionState,
                 onClick = {
                     treeAdapter.setSelectedPath(panelState.id, node.data.location.path)
-                    onNavigate(node.data.location)
+                    if (node.data.type == FileType.DIRECTORY) onNavigate(node.data.location)
                     if (node.data.type == FileType.DIRECTORY) {
                         coroutineScope.launch {
                             treeAdapter.toggleNode(panelState.id, node)
@@ -107,22 +113,26 @@ fun DirectoryTreeView(
                 },
                 onLongClick = {
                     treeAdapter.setSelectedPath(panelState.id, node.data.location.path)
-                    onNavigate(node.data.location)
+                    if (node.data.type == FileType.DIRECTORY) onNavigate(node.data.location)
                     onItemLongClick(node.data)
                 },
                 onCheckToggle = {
-                    var shouldExpand = false
-                    val newSelection = treeSelectionHandler.nextSelection(node, panelState.selectedItemIds) {
-                        if (!engine.treeState.isExpanded(node)) {
-                            shouldExpand = true
-                        }
-                    }
-                    // [FileManagerUI]: Penyelarasan identitas seleksi path dan pemicuan atomik onSelectionChange berdasarkan Mark.MD
-                    onSelectionChange(newSelection)
-                    
-                    if (shouldExpand) {
+                    val intent = ++selectionIntent
+                    val snapshot = latestPanel
+                    val requiresChildren = treeSelectionHandler.needsChildren(node, snapshot.selectedItemIds)
+                    if (!requiresChildren) {
+                        latestSelectionChange(treeSelectionHandler.nextSelection(node, snapshot.selectedItemIds), snapshot.selectionRevision)
+                    } else {
                         coroutineScope.launch {
-                            treeAdapter.expandNode(panelState.id, node)
+                            val loaded = engine.loadSelectionChildren(node)
+                            if (loaded && intent == selectionIntent &&
+                                !latestPanel.isLoading && latestPanel.id == snapshot.id &&
+                                latestPanel.selectionRevision == snapshot.selectionRevision &&
+                                latestPanel.currentLocation == snapshot.currentLocation &&
+                                engine.containsNode(node)) {
+                                treeAdapter.expandNode(snapshot.id, node)
+                                latestSelectionChange(treeSelectionHandler.nextSelection(node, latestPanel.selectedItemIds), snapshot.selectionRevision)
+                            }
                         }
                     }
                 },

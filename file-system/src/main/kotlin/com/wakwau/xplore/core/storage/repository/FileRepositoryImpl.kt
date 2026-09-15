@@ -110,7 +110,10 @@ class FileRepositoryImpl(
             .catch { error ->
                 when (error) {
                     is CancellationException -> throw error
-                    is Exception -> emit(FileOperationResult.Failure(storageErrorMapper.map(error)))
+                    is Exception -> {
+                        if (error is com.wakwau.xplore.core.storage.operation.CommittedDestination) throw error
+                        emit(FileOperationResult.Failure(storageErrorMapper.map(error)))
+                    }
                     else -> throw error
                 }
             }
@@ -140,7 +143,10 @@ class FileRepositoryImpl(
             .catch { error ->
                 when (error) {
                     is CancellationException -> throw error
-                    is Exception -> emit(FileOperationResult.Failure(storageErrorMapper.map(error)))
+                    is Exception -> {
+                        if (error is com.wakwau.xplore.core.storage.operation.CommittedDestination) throw error
+                        emit(FileOperationResult.Failure(storageErrorMapper.map(error)))
+                    }
                     else -> throw error
                 }
             }

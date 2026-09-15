@@ -44,6 +44,11 @@ fun FileManagerScreen(
 
     val activePanel = if (state.activePanelId == PanelId.LEFT) state.leftPanel else state.rightPanel
     
+    val visibleNodes by treeAdapter.getEngine(activePanel.id).treeState.visibleNodes.collectAsStateWithLifecycle()
+    val operationSnapshot = remember(activePanel.id, activePanel.selectedItemIds, visibleNodes) {
+        viewModel.operationSnapshot(activePanel)
+    }
+
     var showSortDialog by remember { mutableStateOf(false) }
 
     val operationPanelPosition = if (state.activePanelId == PanelId.LEFT) {
@@ -68,7 +73,7 @@ fun FileManagerScreen(
         topBar = {
             FileManagerTopBar(
                 title = stringResource(R.string.app_title),
-                selectedCount = activePanel.selectedItemIds.size,
+                selectedCount = operationSnapshot.count,
                 onBackClick = {
                     viewModel.dispatch(DualPaneEvent.NavigateUp(activePanel.id))
                 },
@@ -80,6 +85,7 @@ fun FileManagerScreen(
     ) { paddingValues ->
         FileManagerContent(
             state = state,
+            operationSnapshot = operationSnapshot,
             dialogUiState = dialogUiState,
             treeAdapter = treeAdapter,
             operationPanelPosition = operationPanelPosition,

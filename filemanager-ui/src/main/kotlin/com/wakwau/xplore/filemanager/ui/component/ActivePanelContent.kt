@@ -19,7 +19,7 @@ fun ActivePanelContent(
     onNavigate: (StorageLocation) -> Unit,
     onItemClick: (FileItem) -> Unit,
     onItemLongClick: (FileItem) -> Unit,
-    onSelectionChange: (Set<String>) -> Unit,
+    onSelectionChange: (Set<String>, Long) -> Unit,
     onRetry: () -> Unit,
     onIconClick: (FileItem) -> Unit = {},
     modifier: Modifier = Modifier

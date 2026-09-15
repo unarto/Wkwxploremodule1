@@ -20,7 +20,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileNotFoundException
@@ -213,7 +212,7 @@ class RootFileSystem(
         val sourceLength = if (sourceFile.isFile) sourceFile.length() else 0L
         val isSourceDir = sourceFile.isDirectory
 
-        val renamed = sourceFile.renameTo(destFile) || Shell.cmd("mv ${directoryListingHelper.escapeShellArg(source.path)} ${directoryListingHelper.escapeShellArg(destination.path)}").exec().isSuccess
+        sourceFile.renameTo(destFile)
 
         if (destFile.exists() && !sourceFile.exists()) {
             emit(FileOperationProgress(destFile.length(), destFile.length(), destFile.name))
@@ -227,11 +226,11 @@ class RootFileSystem(
                 currentCoroutineContext().ensureActive()
                 directoryListingHelper.validateDirectoryTree(sourceFile, destFile)
                 currentCoroutineContext().ensureActive()
-                delete(source)
             }) { bytes, name ->
                 copied += bytes
                 emit(FileOperationProgress(copied, totalBytes, name))
             }
+            com.wakwau.xplore.core.storage.filesystem.deleteAfterTransferCommit { delete(source) }
             return@flow
         }
 
@@ -239,17 +238,21 @@ class RootFileSystem(
             emit(progress)
         }
 
-        if (currentCoroutineContext().isActive) {
-            if (!destFile.exists()) {
-                throw IOException("Move failed: destination does not exist after copy (${destination.path})")
-            }
-            if (!isSourceDir && destFile.length() != sourceLength) {
-                try { destFile.delete() } catch (e: Exception) {
-            if (e is CancellationException) throw e; android.util.Log.w("FileSystem", "Failed to clean partial file", e) }
-                throw IOException("Move failed: partial copy detected (destination size mismatch)")
-            }
-            delete(source)
+        currentCoroutineContext().ensureActive()
+        if (!destFile.exists()) {
+            throw IOException("Move failed: destination does not exist after copy (${destination.path})")
         }
+        if (!isSourceDir && destFile.length() != sourceLength) {
+            try {
+                destFile.delete()
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                android.util.Log.w("FileSystem", "Failed to clean partial file", e)
+            }
+            throw IOException("Move failed: partial copy detected (destination size mismatch)")
+        }
+        com.wakwau.xplore.core.storage.filesystem.deleteAfterTransferCommit { delete(source) }
+
     }.flowOn(ioDispatcher)
 
     private fun ensureRootAccess() {

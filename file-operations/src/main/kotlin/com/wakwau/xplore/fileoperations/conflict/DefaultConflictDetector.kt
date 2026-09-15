@@ -8,6 +8,10 @@ import com.wakwau.xplore.core.storage.constant.StorageConstants
 import com.wakwau.xplore.core.storage.metadata.DetailedMetadataReader
 import com.wakwau.xplore.core.storage.model.FileDetailedMetadata
 import com.wakwau.xplore.core.storage.model.StorageLocation
+import com.wakwau.xplore.core.storage.model.isSameOrDescendantOf
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import com.wakwau.xplore.core.storage.operation.FileOperationResult
 import com.wakwau.xplore.core.storage.repository.DirectoryRepository
 
@@ -20,7 +24,9 @@ class DefaultConflictDetector(
         val result = directoryRepository.list(destinationDir, showHidden = true)
         return when (result) {
             is FileOperationResult.Success -> result.data.map { it.name }.toSet()
-            else -> emptySet()
+            is FileOperationResult.Failure -> error("Cannot read destination: ${result.error}")
+            FileOperationResult.Cancelled -> throw CancellationException("Destination listing cancelled")
+            is FileOperationResult.Completed -> error("Unexpected listing completion")
         }
     }
 
@@ -28,23 +34,24 @@ class DefaultConflictDetector(
         sources: List<StorageLocation>,
         destinationDir: StorageLocation
     ): List<FileConflict> {
+        currentCoroutineContext().ensureActive()
+        require(detailedMetadataReader.readDetailedMetadata(destinationDir).isDirectory) { "Destination must be a directory" }
         val existingNames = getExistingNames(destinationDir)
+        val plannedNames = mutableSetOf<String>()
         val conflicts = mutableListOf<FileConflict>()
 
         for (source in sources) {
-            val metadata = runCatching {
-                detailedMetadataReader.readDetailedMetadata(source)
-            }.getOrNull()
+            currentCoroutineContext().ensureActive()
+            val metadata = detailedMetadataReader.readDetailedMetadata(source)
 
             val sourceName = extractItemName(source, metadata)
-            val isDir = metadata?.isDirectory ?: false
+            val isDir = metadata.isDirectory
 
             // Proteksi: jangan memproses kontainer ke dalam dirinya sendiri atau sub-direktorinya
-            if (isDir && isSelfOrInside(source, destinationDir)) {
-                continue
-            }
+            require(!isDir || !destinationDir.isSameOrDescendantOf(source)) { "Cannot transfer a directory into itself or its descendants" }
 
-            val hasConflict = existingNames.any { it.equals(sourceName, ignoreCase = true) }
+            val batchCollision = !plannedNames.add(sourceName.lowercase(java.util.Locale.ROOT))
+            val hasConflict = batchCollision || existingNames.any { it.equals(sourceName, ignoreCase = true) }
             if (hasConflict) {
                 conflicts.add(
                     FileConflict(
@@ -52,48 +59,14 @@ class DefaultConflictDetector(
                         sourceName = sourceName,
                         targetName = sourceName,
                         isDirectory = isDir,
-                        destinationDir = destinationDir
+                        destinationDir = destinationDir,
+                        isBatchCollision = batchCollision
                     )
                 )
             }
         }
 
         return conflicts
-    }
-
-    private fun isSelfOrInside(source: StorageLocation, destination: StorageLocation): Boolean {
-        if (source.rootId.isNotEmpty() && destination.rootId.isNotEmpty() && source.rootId != destination.rootId) {
-            return false
-        }
-        if (source.path.startsWith(StorageConstants.CONTENT_SCHEME_PREFIX) || destination.path.startsWith(StorageConstants.CONTENT_SCHEME_PREFIX)) {
-            return source.path.trimEnd('/') == destination.path.trimEnd('/')
-        }
-        val sourceNorm = normalizePath(source.path)
-        val destNorm = normalizePath(destination.path)
-        if (sourceNorm.isEmpty() || destNorm.isEmpty()) {
-            return false
-        }
-        return destNorm == sourceNorm || (sourceNorm == "/" && destNorm.startsWith("/")) || destNorm.startsWith("$sourceNorm/")
-    }
-
-    private fun normalizePath(rawPath: String): String {
-        val path = rawPath.replace('\\', '/')
-        if (path.isEmpty()) return ""
-        val isAbsolute = path.startsWith('/')
-        val segments = mutableListOf<String>()
-        for (segment in path.split('/')) {
-            when (segment) {
-                "", "." -> continue
-                ".." -> if (segments.isNotEmpty() && segments.last() != "..") {
-                    segments.removeAt(segments.size - 1)
-                } else if (!isAbsolute) {
-                    segments.add("..")
-                }
-                else -> segments.add(segment)
-            }
-        }
-        val joined = segments.joinToString("/")
-        return if (isAbsolute) "/$joined" else joined
     }
 
     private fun extractItemName(location: StorageLocation, metadata: FileDetailedMetadata?): String {

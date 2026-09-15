@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 
 class DualPaneStateHolder(
     private val scope: CoroutineScope,
@@ -33,6 +34,16 @@ class DualPaneStateHolder(
     private val linkStorageUseCase: LinkStorageUseCase,
     private val getParentLocationUseCase: GetParentLocationUseCase = GetParentLocationUseCase()
 ) {
+    private val navigationJobs = mutableMapOf<PanelId, Job>()
+
+    private fun loadLatestDirectory(panelId: PanelId, location: com.wakwau.xplore.core.storage.model.StorageLocation) {
+        val requestId = refreshHandler.beginRequest(panelId)
+        navigationJobs.remove(panelId)?.cancel()
+        navigationJobs[panelId] = scope.launch {
+            refreshHandler.loadDirectory(panelId, location, requestId)
+        }
+    }
+
     private var eventListener: ((DualPaneEvent) -> Unit)? = null
 
     // [Jalur Class/Modul]: filemanager/src/main/kotlin/com/wakwau/xplore/filemanager/state/DualPaneStateHolder.kt
@@ -112,25 +123,17 @@ class DualPaneStateHolder(
 
         when (event) {
             is DualPaneEvent.OpenLocation -> {
-                scope.launch {
-                    refreshHandler.loadDirectory(event.panelId, event.location)
-                }
+                loadLatestDirectory(event.panelId, event.location)
             }
             is DualPaneEvent.Refresh -> {
                 val panel = if (event.panelId == PanelId.LEFT) stateSnapshot.leftPanel else stateSnapshot.rightPanel
-                scope.launch {
-                    panel.currentLocation?.let { location ->
-                        refreshHandler.loadDirectory(event.panelId, location)
-                    }
-                }
+                panel.currentLocation?.let { loadLatestDirectory(event.panelId, it) }
             }
             is DualPaneEvent.NavigateUp -> {
                 val panel = if (event.panelId == PanelId.LEFT) stateSnapshot.leftPanel else stateSnapshot.rightPanel
                 panel.currentLocation?.let { location ->
                     getParentLocationUseCase(location)?.let { parentLoc ->
-                        scope.launch {
-                            refreshHandler.loadDirectory(event.panelId, parentLoc)
-                        }
+                        loadLatestDirectory(event.panelId, parentLoc)
                     }
                 }
             }

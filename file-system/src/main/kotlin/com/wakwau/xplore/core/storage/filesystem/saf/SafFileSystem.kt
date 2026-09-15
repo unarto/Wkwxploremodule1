@@ -217,11 +217,11 @@ class SafFileSystem(
                 currentCoroutineContext().ensureActive()
                 streamTransferHelper.validateDirectoryTree(sourceDoc, published)
                 currentCoroutineContext().ensureActive()
-                delete(source)
             }) { bytes, name ->
                 copied += bytes
                 emit(FileOperationProgress(copied, totalBytes, name))
             }
+            com.wakwau.xplore.core.storage.filesystem.deleteAfterTransferCommit { delete(source) }
             return@flow
         }
 
@@ -247,8 +247,7 @@ class SafFileSystem(
             )
         }
         moveTargetValidator.validate(isSourceDir, sourceSize, targetState)
-        currentCoroutineContext().ensureActive()
-        delete(source)
+        com.wakwau.xplore.core.storage.filesystem.deleteAfterTransferCommit { delete(source) }
     }.flowOn(Dispatchers.IO)
 
     override suspend fun getFileItem(location: StorageLocation): FileItem? {

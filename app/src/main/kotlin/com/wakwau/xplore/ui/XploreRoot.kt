@@ -150,18 +150,7 @@ fun XploreRoot(
                                 currentIndex = currentOpState.currentConflictIndex,
                                 totalConflicts = currentOpState.pendingConflicts.size,
                                 onDecision = { choice, applyToAll ->
-                                    val conflict = currentOpState.currentConflict ?: return@ConflictResolutionDialog
-                                    val map = mutableMapOf(conflict.source to choice)
-                                    if (applyToAll) {
-                                        for (i in currentOpState.currentConflictIndex until currentOpState.pendingConflicts.size) {
-                                            map[currentOpState.pendingConflicts[i].source] = choice
-                                        }
-                                    }
-                                    if (currentOpState.isMove) {
-                                        appOrchestrator.resolveMoveConflict(currentOpState.allSources, currentOpState.destinationDir, map)
-                                    } else {
-                                        appOrchestrator.resolveCopyConflict(currentOpState.allSources, currentOpState.destinationDir, map)
-                                    }
+                                    appOrchestrator.resolveConflictDecision(choice, applyToAll)
                                 },
                                 onDismiss = { dualPaneViewModel.dispatch(DualPaneEvent.ClearOperationState) }
                             )
@@ -186,9 +175,9 @@ fun XploreRoot(
                                 confirmButtonText = opName,
                                 onConfirm = {
                                     if (isMove) {
-                                        dualPaneViewModel.dispatch(DualPaneEvent.ExecuteConfirmedMove(currentOpState.items, currentOpState.targetPath))
+                                        dualPaneViewModel.dispatch(DualPaneEvent.ExecuteConfirmedMove(currentOpState.items, currentOpState.destination))
                                     } else {
-                                        dualPaneViewModel.dispatch(DualPaneEvent.ExecuteConfirmedCopy(currentOpState.items, currentOpState.targetPath))
+                                        dualPaneViewModel.dispatch(DualPaneEvent.ExecuteConfirmedCopy(currentOpState.items, currentOpState.destination))
                                     }
                                 },
                                 onDismissRequest = { dualPaneViewModel.dispatch(DualPaneEvent.ClearOperationState) }
@@ -196,7 +185,7 @@ fun XploreRoot(
                                 Text(
                                     text = stringResource(
                                         com.wakwau.xplore.filemanager.ui.R.string.msg_operation_confirmation,
-                                        opName, currentOpState.items.size, currentOpState.targetPath
+                                        opName, currentOpState.items.size, currentOpState.destination.path
                                     ),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface

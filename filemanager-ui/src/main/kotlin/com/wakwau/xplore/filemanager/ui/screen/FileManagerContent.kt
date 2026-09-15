@@ -34,6 +34,7 @@ import com.wakwau.xplore.filemanager.ui.tree.TreeNavigationAdapter
 @Composable
 fun FileManagerContent(
     state: DualPaneState,
+    operationSnapshot: com.wakwau.xplore.core.storage.operation.MarkedOperationSnapshot,
     dialogUiState: FileDialogUiState,
     treeAdapter: TreeNavigationAdapter,
     operationPanelPosition: FileOperationPanelPosition,
@@ -51,18 +52,12 @@ fun FileManagerContent(
     val inactivePanel = if (isLeftActive) state.rightPanel else state.leftPanel
     
     val activeEngine = treeAdapter.getEngine(activePanel.id)
-    val visibleNodes by activeEngine.treeState.visibleNodes.collectAsStateWithLifecycle()
-    val treeSelectionHandler = remember { com.wakwau.xplore.filemanager.ui.selection.TreeSelectionHandler() }
-    val selectedCount = remember(visibleNodes, activePanel.selectedItemIds) {
-        visibleNodes.count { 
-            treeSelectionHandler.getSelectionState(it.node, activePanel.selectedItemIds) == com.wakwau.xplore.filemanager.ui.selection.FolderCheckCycleState.CHECKED 
-        }
-    }
+    val selectedCount = operationSnapshot.count
 
     val invalidLocationMsg = stringResource(id = com.wakwau.xplore.filemanager.ui.R.string.err_invalid_location)
 
     val handleSideAction: (SideAction) -> Unit = { action ->
-        val selectedItems = treeAdapter.getSelectedItems(activePanel.id, activePanel.selectedItemIds)
+        val selectedItems = operationSnapshot.items
         when (action) {
             SideAction.SWITCH_PANE -> {
                 panelStateController.togglePanel()
@@ -119,35 +114,19 @@ fun FileManagerContent(
                     onEvent(DualPaneEvent.ShowRenameDialog(selectedItems.first()))
                 }
             }
-            SideAction.COPY -> {
-                // [CopyFix]: Handle targetPath null warning & lock selection snapshot berdasarkan copy.md
-                // [CopyFix]: Final integration validation for Copy-Paste service & UI pipeline berdasarkan copy.md
-                val targetPath = inactivePanel.currentLocation?.path 
-                    ?: treeAdapter.getSelectedPath(inactivePanel.id).value 
-                    ?: treeAdapter.getEngine(inactivePanel.id).treeState.roots.firstOrNull()?.data?.location?.path
-                    
-                if (targetPath == null) {
+            SideAction.COPY, SideAction.MOVE -> {
+                val destination = inactivePanel.currentLocation
+                    ?: treeAdapter.getEngine(inactivePanel.id).treeState.roots.firstOrNull()?.data?.location
+                if (!operationSnapshot.isValid || destination == null || inactivePanel.isLoading || inactivePanel.error != null) {
                     onEvent(DualPaneEvent.OperationFailed(invalidLocationMsg))
-                } else {
-                    val lockedIds = activePanel.selectedItemIds.toSet()
-                    val lockedItems = lockedIds.mapNotNull { path ->
-                        activeEngine.findNodeByPath(path)?.data 
-                            ?: selectedItems.firstOrNull { it.location.path == path }
-                    }
-                    if (lockedItems.isNotEmpty()) {
-                        onEvent(DualPaneEvent.ShowOperationConfirmation(isMove = false, items = lockedItems, targetPath = targetPath))
-                    } else if (selectedItems.isNotEmpty()) {
-                        onEvent(DualPaneEvent.ShowOperationConfirmation(isMove = false, items = selectedItems, targetPath = targetPath))
-                    }
-                }
-            }
-            SideAction.MOVE -> {
-                val targetPath = inactivePanel.currentLocation?.path 
-                    ?: treeAdapter.getSelectedPath(inactivePanel.id).value 
-                    ?: treeAdapter.getEngine(inactivePanel.id).treeState.roots.firstOrNull()?.data?.location?.path
-
-                if (selectedItems.isNotEmpty() && targetPath != null) {
-                    onEvent(DualPaneEvent.ShowOperationConfirmation(isMove = true, items = selectedItems, targetPath = targetPath))
+                } else if (selectedItems.isNotEmpty()) {
+                    onEvent(DualPaneEvent.ShowOperationConfirmation(
+                        isMove = action == SideAction.MOVE,
+                        items = selectedItems,
+                        destination = destination,
+                        sourcePanelId = activePanel.id,
+                        markedIds = activePanel.selectedItemIds.toSet()
+                    ))
                 }
             }
             SideAction.DELETE -> {
@@ -235,17 +214,13 @@ fun FileManagerContent(
                     }
                 },
                 onItemLongClick = { item ->
-                    // [FileManagerUI]: Penyelarasan identitas seleksi path dan pemicuan atomik onSelectionChange berdasarkan Mark.MD
-                    onEvent(DualPaneEvent.SetSelectedItems(activePanel.id, setOf(item.location.path)))
                     onEvent(DualPaneEvent.ShowFileDetails(item))
                 },
                 onIconClick = { item ->
-                    // [FileManagerUI]: Penyelarasan identitas seleksi path dan pemicuan atomik onSelectionChange berdasarkan Mark.MD
-                    onEvent(DualPaneEvent.SetSelectedItems(activePanel.id, setOf(item.location.path)))
                     onEvent(DualPaneEvent.ShowFileDetails(item))
                 },
-                onSelectionChange = { selectedIds ->
-                    onEvent(DualPaneEvent.SetSelectedItems(activePanel.id, selectedIds))
+                onSelectionChange = { selectedIds, revision ->
+                    onEvent(DualPaneEvent.SetSelectedItems(activePanel.id, selectedIds, revision))
                 },
                 onRetry = { onEvent(DualPaneEvent.Refresh(activePanel.id)) }
             )

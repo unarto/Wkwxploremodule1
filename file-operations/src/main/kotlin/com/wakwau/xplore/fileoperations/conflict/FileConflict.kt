@@ -9,5 +9,6 @@ data class FileConflict(
     val sourceName: String,
     val targetName: String,
     val isDirectory: Boolean,
-    val destinationDir: StorageLocation
+    val destinationDir: StorageLocation,
+    val isBatchCollision: Boolean = false
 )

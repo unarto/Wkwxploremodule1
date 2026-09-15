@@ -98,6 +98,7 @@ fun ConflictResolutionDialog(
                 Spacer(modifier = Modifier.width(4.dp))
                 OutlinedButton(
                     onClick = { onDecision(ConflictChoice.OVERWRITE, applyToAll) },
+                    enabled = !conflict.isBatchCollision,
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(stringResource(R.string.btn_conflict_overwrite))

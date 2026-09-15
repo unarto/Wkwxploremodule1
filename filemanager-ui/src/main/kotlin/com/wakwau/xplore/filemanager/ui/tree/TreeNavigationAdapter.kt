@@ -77,9 +77,6 @@ class TreeNavigationAdapter(
         return getEngine(panelId).treeState.roots.isNotEmpty()
     }
 
-    fun getSelectedItems(panelId: PanelId, selectedIds: Set<String>): List<FileItem> {
-        return getEngine(panelId).getSelectedItems(selectedIds)
-    }
 
     fun updateSearchResults(panelId: PanelId, keyword: String, items: List<FileItem>) {
         getEngine(panelId).updateSearchResults(keyword, items)

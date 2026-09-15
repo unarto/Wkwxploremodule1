@@ -110,41 +110,24 @@ open class CrossFilesystemTransferBridge(
         destType: StorageBackendType
     ): Flow<FileOperationProgress> = flow {
         val isSourceDir = directoryHelper.isSourceDirectory(source, sourceType)
-        try {
-            if (isSourceDir) {
-                copyCross(source, destination, sourceType, destType) { _ ->
-                    currentCoroutineContext().ensureActive()
-                    directoryHelper.validateTransferComplete(
-                        source,
-                        destination,
-                        sourceType,
-                        destType,
-                        isSourceDir = true
-                    )
-                    currentCoroutineContext().ensureActive()
-                    directoryHelper.deleteSource(source, sourceType)
-                }.collect { emit(it) }
-                return@flow
+        if (isSourceDir) {
+            copyCross(source, destination, sourceType, destType) {
+                currentCoroutineContext().ensureActive()
+                directoryHelper.validateTransferComplete(source, destination, sourceType, destType, true)
+                currentCoroutineContext().ensureActive()
+            }.collect { emit(it) }
+        } else {
+            val totalBytes = directoryHelper.calculateTotalSize(source, sourceType)
+            var copiedBytes = 0L
+            copySingleFileCross(source, destination, sourceType, destType) { bytes, name ->
+                copiedBytes += bytes
+                emit(FileOperationProgress(copiedBytes, totalBytes, name))
             }
-
-            copyCross(source, destination, sourceType, destType).collect { emit(it) }
-            currentCoroutineContext().ensureActive()
-            directoryHelper.validateTransferComplete(
-                source,
-                destination,
-                sourceType,
-                destType,
-                isSourceDir
-            )
-            currentCoroutineContext().ensureActive()
+        }
+        // Publish and validation have committed. Even partial source deletion must
+        // leave the valid destination intact.
+        com.wakwau.xplore.core.storage.filesystem.deleteAfterTransferCommit {
             directoryHelper.deleteSource(source, sourceType)
-        } catch (e: Throwable) {
-            // Directory copy owns and cleans only its staging subtree. Deleting the
-            // resolved target here could destroy a destination that predated this move.
-            if (!isSourceDir) {
-                directoryHelper.rollbackDestination(source, destination, sourceType, destType)
-            }
-            throw e
         }
     }.flowOn(Dispatchers.IO)
 
@@ -156,6 +139,8 @@ open class CrossFilesystemTransferBridge(
         onProgress: suspend (Long, String) -> Unit
     ) {
         val sourceName = directoryHelper.getSourceName(source, sourceType)
+        val expectedBytes = directoryHelper.calculateTotalSize(source, sourceType)
+        var writtenBytes = 0L
         val inStream = openSourceInputStream(source, sourceType)
         var outHandle: OutputHandle? = null
 
@@ -168,10 +153,14 @@ open class CrossFilesystemTransferBridge(
                     while (input.read(buffer).also { bytesRead = it } >= 0) {
                         currentCoroutineContext().ensureActive()
                         output.write(buffer, 0, bytesRead)
+                        writtenBytes += bytesRead
                         onProgress(bytesRead.toLong(), sourceName)
                     }
                 }
             }
+            currentCoroutineContext().ensureActive()
+            if (writtenBytes != expectedBytes) throw IOException("Source changed during copy: ${source.path}")
+            outHandle.validate(writtenBytes)
             outHandle.commit()
         } catch (e: CancellationException) {
             outHandle?.cleanup()
@@ -210,7 +199,7 @@ open class CrossFilesystemTransferBridge(
             } else {
                 copySingleFileCross(
                     source = child,
-                    destination = targetDestLocation,
+                    destination = directoryHelper.childTarget(targetDestLocation, directoryHelper.getSourceName(child, sourceType)),
                     sourceType = sourceType,
                     destType = destType,
                     onProgress = onProgress
@@ -239,6 +228,7 @@ open class CrossFilesystemTransferBridge(
     private data class OutputHandle(
         val outputStream: OutputStream,
         val commit: () -> Unit,
+        val validate: (Long) -> Unit,
         val cleanup: () -> Unit
     )
 
@@ -254,15 +244,17 @@ open class CrossFilesystemTransferBridge(
             OutputHandle(
                 FileOutputStream(temporary),
                 commit = { replaceLocalFile(temporary, destFile) },
+                validate = { size -> if (temporary.length() != size) throw IOException("Incomplete staged file: $temporary") },
                 cleanup = { try { temporary.delete() } catch (e: Exception) { android.util.Log.w("FileSystem", "Failed to clean temporary file", e) } }
             )
         }
         StorageBackendType.SAF -> {
-            val destDoc = directoryHelper.resolveSafDocument(Uri.parse(destination.path))
+            val finalName = Uri.parse(destination.path).fragment ?: sourceFileName
+            val destDoc = directoryHelper.resolveSafDocument(Uri.parse(destination.path.substringBefore('#')))
                 ?: throw FileNotFoundException("Destination SAF folder not found: ${destination.path}")
             val parent = if (destDoc.isDirectory) destDoc else destDoc.parentFile
                 ?: throw IOException("Cannot safely replace SAF destination without a parent: ${destDoc.uri}")
-            val existing = if (destDoc.isDirectory) parent.findFile(sourceFileName) else destDoc
+            val existing = if (destDoc.isDirectory) parent.findFile(finalName) else destDoc
             val temporaryName = ".$sourceFileName.wkw-${UUID.randomUUID()}.tmp"
             val temporary = parent.createFile(StorageConstants.DEFAULT_MIME_TYPE_ALL, temporaryName)
                 ?: throw IOException("Failed to create temporary SAF destination file: $sourceFileName")
@@ -273,7 +265,8 @@ open class CrossFilesystemTransferBridge(
                 }
             OutputHandle(
                 outStream,
-                commit = { replaceSafDocument(parent, temporary, existing, sourceFileName) },
+                commit = { replaceSafDocument(parent, temporary, existing, finalName) },
+                validate = { size -> if (temporary.length() != size) throw IOException("Incomplete staged SAF file: ${temporary.uri}") },
                 cleanup = { try { parent.findFile(temporaryName)?.delete() } catch (e: Exception) { android.util.Log.w("FileSystem", "Failed to clean temporary file", e) } }
             )
         }
@@ -286,6 +279,7 @@ open class CrossFilesystemTransferBridge(
             OutputHandle(
                 android.os.ParcelFileDescriptor.AutoCloseOutputStream(pfd),
                 commit = { replaceShizukuFile(service, temporaryPath, destFilePath) },
+                validate = { size -> if (service.length(temporaryPath) != size) throw IOException("Incomplete staged file: $temporaryPath") },
                 cleanup = { try { service.delete(temporaryPath) } catch (e: Exception) { android.util.Log.w("FileSystem", "Failed to clean temporary file", e) } }
             )
         }
@@ -297,6 +291,7 @@ open class CrossFilesystemTransferBridge(
             OutputHandle(
                 SuFileOutputStream.open(temporary),
                 commit = { replaceRootFile(temporary, destFile) },
+                validate = { size -> if (temporary.length() != size) throw IOException("Incomplete staged file: $temporary") },
                 cleanup = { try { temporary.delete() } catch (e: Exception) { android.util.Log.w("FileSystem", "Failed to clean temporary file", e) } }
             )
         }
@@ -314,11 +309,14 @@ open class CrossFilesystemTransferBridge(
             Files.move(destination.toPath(), backup.toPath())
             try {
                 Files.move(temporary.toPath(), destination.toPath())
-                Files.delete(backup.toPath())
             } catch (error: Throwable) {
-                Files.deleteIfExists(destination.toPath())
-                Files.move(backup.toPath(), destination.toPath())
+                if (!destination.exists()) Files.move(backup.toPath(), destination.toPath())
                 throw error
+            }
+            try {
+                Files.delete(backup.toPath())
+            } catch (error: Exception) {
+                android.util.Log.w("FileSystem", "Published destination retained; backup cleanup failed", error)
             }
         }
     }
@@ -332,11 +330,14 @@ open class CrossFilesystemTransferBridge(
         if (!existing.renameTo(backupName)) throw IOException("Failed to preserve SAF destination: $finalName")
         try {
             if (!temporary.renameTo(finalName)) throw IOException("Failed to publish SAF destination: $finalName")
-            if (!existing.delete() && existing.exists()) throw IOException("Failed to remove SAF destination backup: $backupName")
         } catch (error: Throwable) {
-            parent.findFile(finalName)?.delete()
-            existing.renameTo(finalName)
+            if (parent.findFile(finalName) == null) existing.renameTo(finalName)
             throw error
+        }
+        try {
+            if (!existing.delete() && existing.exists()) throw IOException("Failed to remove SAF destination backup: $backupName")
+        } catch (error: Exception) {
+            android.util.Log.w("FileSystem", "Published destination retained; backup cleanup failed", error)
         }
     }
 
@@ -349,11 +350,14 @@ open class CrossFilesystemTransferBridge(
         if (!service.rename(destinationPath, backupPath)) throw IOException("Failed to preserve Shizuku destination: $destinationPath")
         try {
             if (!service.rename(temporaryPath, destinationPath)) throw IOException("Failed to publish Shizuku destination: $destinationPath")
-            if (!service.delete(backupPath) && service.exists(backupPath)) throw IOException("Failed to remove Shizuku destination backup: $backupPath")
         } catch (error: Throwable) {
-            if (service.exists(destinationPath)) service.delete(destinationPath)
-            service.rename(backupPath, destinationPath)
+            if (!service.exists(destinationPath)) service.rename(backupPath, destinationPath)
             throw error
+        }
+        try {
+            if (!service.delete(backupPath) && service.exists(backupPath)) throw IOException("Failed to remove Shizuku destination backup: $backupPath")
+        } catch (error: Exception) {
+            android.util.Log.w("FileSystem", "Published destination retained; backup cleanup failed", error)
         }
     }
 
@@ -366,11 +370,14 @@ open class CrossFilesystemTransferBridge(
         if (!destination.renameTo(backup)) throw IOException("Failed to preserve root destination: ${destination.absolutePath}")
         try {
             if (!temporary.renameTo(destination)) throw IOException("Failed to publish root destination: ${destination.absolutePath}")
-            if (!backup.delete() && backup.exists()) throw IOException("Failed to remove root destination backup: ${backup.absolutePath}")
         } catch (error: Throwable) {
-            if (destination.exists()) destination.delete()
-            backup.renameTo(destination)
+            if (!destination.exists()) backup.renameTo(destination)
             throw error
+        }
+        try {
+            if (!backup.delete() && backup.exists()) throw IOException("Failed to remove root destination backup: ${backup.absolutePath}")
+        } catch (error: Exception) {
+            android.util.Log.w("FileSystem", "Published destination retained; backup cleanup failed", error)
         }
     }
 }

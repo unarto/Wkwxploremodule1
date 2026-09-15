@@ -17,6 +17,8 @@ import com.wakwau.xplore.fileoperations.conflict.ResolveTransferUseCase
 import com.wakwau.xplore.fileoperations.move.MoveFilesUseCase
 import com.wakwau.xplore.fileoperations.conflict.ResolvedTransferItem
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 class MoveOperationOrchestrator(
     private val moveFilesUseCase: MoveFilesUseCase,
@@ -30,7 +32,8 @@ class MoveOperationOrchestrator(
     suspend fun execute(
         state: DualPaneState,
         itemsToMove: List<FileItem>,
-        destinationPath: String
+        destinationPath: String,
+        destinationRootId: String? = null
     ) {
         val targetPanel = state.inactivePanel
         if (itemsToMove.isEmpty()) return
@@ -39,10 +42,11 @@ class MoveOperationOrchestrator(
             val sources = itemsToMove.map { it.location }
             val destinationDir = StorageLocation(
                 path = destinationPath,
-                rootId = targetPanel.currentLocation?.rootId ?: ""
+                rootId = destinationRootId ?: targetPanel.currentLocation?.rootId ?: ""
             )
 
             val conflicts = detectConflictsUseCase(sources, destinationDir)
+            currentCoroutineContext().ensureActive()
             if (conflicts.isNotEmpty() && onShowConflict != null) {
                 onShowConflict.invoke(true, conflicts, destinationDir, sources)
                 return
@@ -54,13 +58,19 @@ class MoveOperationOrchestrator(
                 conflictDecisions = emptyMap()
             )
 
+            currentCoroutineContext().ensureActive()
             dispatch(DualPaneEvent.OperationStarted(FileOperationConstants.OPERATION_MOVE))
             val operationId = moveFilesUseCase.invoke(resolved)
             onEnqueued(operationId, resolved)
+        } catch (e: com.wakwau.xplore.fileoperations.conflict.UnresolvedTransferConflicts) {
+            currentCoroutineContext().ensureActive()
+            val destinationDir = StorageLocation(destinationPath, destinationRootId ?: targetPanel.currentLocation?.rootId ?: "")
+            onShowConflict?.invoke(true, e.conflicts, destinationDir, itemsToMove.map { it.location })
+                ?: throw e
         } catch (e: CancellationException) {
-            dispatch(DualPaneEvent.OperationCancelled)
             throw e
         } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
             val error = storageErrorMapper.map(e)
             dispatch(DualPaneEvent.OperationFailed(error.name))
         }
@@ -78,13 +88,17 @@ class MoveOperationOrchestrator(
                 conflictDecisions = decisions
             )
 
+            currentCoroutineContext().ensureActive()
             dispatch(DualPaneEvent.OperationStarted(FileOperationConstants.OPERATION_MOVE))
             val operationId = moveFilesUseCase.invoke(resolved)
             onEnqueued(operationId, resolved)
+        } catch (e: com.wakwau.xplore.fileoperations.conflict.UnresolvedTransferConflicts) {
+            currentCoroutineContext().ensureActive()
+            onShowConflict?.invoke(true, e.conflicts, destinationDir, sources) ?: throw e
         } catch (e: CancellationException) {
-            dispatch(DualPaneEvent.OperationCancelled)
             throw e
         } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
             val error = storageErrorMapper.map(e)
             dispatch(DualPaneEvent.OperationFailed(error.name))
         }

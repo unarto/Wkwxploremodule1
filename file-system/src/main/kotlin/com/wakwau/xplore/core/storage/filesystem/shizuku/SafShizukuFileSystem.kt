@@ -18,7 +18,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
 import java.io.FileNotFoundException
 import java.io.IOException
 
@@ -201,24 +200,28 @@ class SafShizukuFileSystem(
                 currentCoroutineContext().ensureActive()
                 transferHandler.validateDirectoryTree(service, source.path, destination.path)
                 currentCoroutineContext().ensureActive()
-                delete(source)
             }) { bytes, name ->
                 copied += bytes
                 emit(FileOperationProgress(copied, totalBytes, name))
             }
+            com.wakwau.xplore.core.storage.filesystem.deleteAfterTransferCommit { delete(source) }
             return@flow
         }
 
         copy(source, destination).collect { emit(it) }
 
-        if (currentCoroutineContext().isActive) {
-            if (!service.exists(destination.path)) throw IOException("Move failed: destination does not exist after copy (${destination.path})")
-            if (!isSourceDir && service.length(destination.path) != sourceSize) {
-                try { service.delete(destination.path) } catch (e: Exception) {
-            if (e is CancellationException) throw e; android.util.Log.w("FileSystem", "Failed to clean partial file", e) }
-                throw IOException("Move failed: partial copy detected (destination size mismatch)")
+        currentCoroutineContext().ensureActive()
+        if (!service.exists(destination.path)) throw IOException("Move failed: destination does not exist after copy (${destination.path})")
+        if (!isSourceDir && service.length(destination.path) != sourceSize) {
+            try {
+                service.delete(destination.path)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                android.util.Log.w("FileSystem", "Failed to clean partial file", e)
             }
-            delete(source)
+            throw IOException("Move failed: partial copy detected (destination size mismatch)")
         }
+        com.wakwau.xplore.core.storage.filesystem.deleteAfterTransferCommit { delete(source) }
+
     }.flowOn(Dispatchers.IO)
 }

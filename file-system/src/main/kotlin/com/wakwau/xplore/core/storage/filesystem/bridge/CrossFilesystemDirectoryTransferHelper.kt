@@ -152,14 +152,14 @@ class CrossFilesystemDirectoryTransferHelper(
             }
             StorageBackendType.SHIZUKU -> {
                 val service = getShizukuService()
-                val targetPath = resolveShizukuDestFilePath(dirName, destination.path)
+                val targetPath = childTarget(destination, dirName).path
                 if (!service.exists(targetPath)) {
                     service.createDirectory(targetPath)
                 }
                 StorageLocation(targetPath, destination.rootId)
             }
             StorageBackendType.ROOT -> {
-                val targetPath = resolveRootDestFilePath(dirName, destination.path)
+                val targetPath = childTarget(destination, dirName).path
                 val dir = SuFile(targetPath)
                 if (!dir.exists()) {
                     dir.mkdirs()
@@ -253,7 +253,6 @@ class CrossFilesystemDirectoryTransferHelper(
             val sourceSize = getFileSize(source, sourceType)
             val destSize = getFileSize(destinationTarget, destType)
             if (destSize != sourceSize) {
-                rollbackDestination(source, destination, sourceType, destType)
                 throw IOException("Cross-filesystem move validation failed: destination file incomplete or size mismatch")
             }
         } else {
@@ -399,33 +398,6 @@ class CrossFilesystemDirectoryTransferHelper(
             ?: throw FileNotFoundException("Root file not found during validation: ${location.path}")
     }
 
-    suspend fun rollbackDestination(
-        source: StorageLocation,
-        destination: StorageLocation,
-        sourceType: StorageBackendType,
-        destType: StorageBackendType
-    ) {
-        try {
-            val sourceName = getSourceName(source, sourceType)
-            val targetLocation = when (destType) {
-                StorageBackendType.LOCAL -> StorageLocation(resolveLocalDestFile(sourceName, destination.path).absolutePath, destination.rootId)
-                StorageBackendType.SAF -> {
-                    val doc = resolveSafDocument(Uri.parse(destination.path))
-                    val target = if (doc?.isDirectory == true) doc.findFile(sourceName) else doc
-                    target?.let { StorageLocation(it.uri.toString(), destination.rootId) }
-                }
-                StorageBackendType.SHIZUKU -> StorageLocation(resolveShizukuDestFilePath(sourceName, destination.path), destination.rootId)
-                StorageBackendType.ROOT -> StorageLocation(resolveRootDestFilePath(sourceName, destination.path), destination.rootId)
-            }
-            if (targetLocation != null) {
-                deleteSource(targetLocation, destType)
-            }
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            android.util.Log.w("FileSystem", "Failed to clean partial file", e)
-        }
-    }
-
     suspend fun deleteSource(source: StorageLocation, sourceType: StorageBackendType) = when (sourceType) {
         StorageBackendType.LOCAL -> localFileSystem.delete(source)
         StorageBackendType.SAF -> safFileSystem.delete(source)
@@ -433,14 +405,21 @@ class CrossFilesystemDirectoryTransferHelper(
         StorageBackendType.ROOT -> rootFileSystem.delete(source)
     }
 
+    fun childTarget(parent: StorageLocation, name: String): StorageLocation =
+        StorageLocation(
+            if (parent.path.startsWith(StorageConstants.CONTENT_SCHEME_PREFIX)) "${parent.path.substringBefore('#')}#$name"
+            else "${parent.path.trimEnd('/')}/$name",
+            parent.rootId
+        )
+
     fun resolveLocalDestFile(sourceName: String, destPath: String): File =
-        File(destPath).let { if (it.isDirectory) File(it, sourceName) else it }
+        File(destPath)
 
     fun resolveShizukuDestFilePath(sourceName: String, destPath: String): String =
-        if (destPath.endsWith("/")) "$destPath$sourceName" else "$destPath/$sourceName"
+        destPath
 
     fun resolveRootDestFilePath(sourceName: String, destPath: String): String =
-        if (destPath.endsWith("/")) "$destPath$sourceName" else "$destPath/$sourceName"
+        destPath
 
     fun resolveSafDocument(uri: Uri): DocumentFile? = try {
         DocumentFile.fromTreeUri(context, uri) ?: DocumentFile.fromSingleUri(context, uri)

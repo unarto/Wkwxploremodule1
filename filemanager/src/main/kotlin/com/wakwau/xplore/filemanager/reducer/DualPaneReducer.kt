@@ -18,16 +18,17 @@ class DualPaneReducer {
             }
             is DualPaneEvent.OpenLocation -> {
                 updatePanel(state, event.panelId) {
-                    it.copy(currentLocation = event.location, isLoading = true, error = null)
+                    it.copy(isLoading = true, error = null, selectionRevision = it.selectionRevision + 1)
                 }
             }
             is DualPaneEvent.LoadingStarted -> {
                 updatePanel(state, event.panelId) {
-                    it.copy(isLoading = true, error = null)
+                    it.copy(isLoading = true, error = null, loadingRequestId = event.requestId, selectionRevision = it.selectionRevision + 1)
                 }
             }
             is DualPaneEvent.DirectoryLoaded -> {
                 updatePanel(state, event.panelId) {
+                    if (event.requestId != null && event.requestId != it.loadingRequestId) return@updatePanel it
                     it.copy(
                         currentLocation = event.location,
                         items = event.items,
@@ -40,6 +41,7 @@ class DualPaneReducer {
             }
             is DualPaneEvent.DirectoryLoadFailed -> {
                 updatePanel(state, event.panelId) {
+                    if (event.requestId != null && event.requestId != it.loadingRequestId) return@updatePanel it
                     it.copy(isLoading = false, error = event.error)
                 }
             }
@@ -50,17 +52,21 @@ class DualPaneReducer {
                     } else {
                         it.selectedItemIds + event.itemId
                     }
-                    it.copy(selectedItemIds = newSelection)
+                    it.copy(selectedItemIds = newSelection, selectionRevision = it.selectionRevision + 1)
                 }
             }
             is DualPaneEvent.SetSelectedItems -> {
                 updatePanel(state, event.panelId) {
-                    it.copy(selectedItemIds = event.itemIds)
+                    if (event.expectedRevision != null && event.expectedRevision != it.selectionRevision) return@updatePanel it
+                    it.copy(selectedItemIds = event.itemIds.toSet(), selectionRevision = it.selectionRevision + 1)
                 }
+            }
+            is DualPaneEvent.RemoveSelectedItems -> {
+                updatePanel(state, event.panelId) { it.copy(selectedItemIds = it.selectedItemIds - event.itemIds, selectionRevision = it.selectionRevision + 1) }
             }
             is DualPaneEvent.ClearSelection -> {
                 updatePanel(state, event.panelId) {
-                    it.copy(selectedItemIds = emptySet())
+                    it.copy(selectedItemIds = emptySet(), selectionRevision = it.selectionRevision + 1)
                 }
             }
 
