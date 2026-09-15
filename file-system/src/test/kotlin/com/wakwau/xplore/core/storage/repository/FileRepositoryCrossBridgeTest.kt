@@ -84,7 +84,8 @@ class FileRepositoryCrossBridgeTest {
                 source: StorageLocation,
                 destination: StorageLocation,
                 sourceType: StorageBackendType,
-                destType: StorageBackendType
+                destType: StorageBackendType,
+                afterDirectoryPublish: suspend (StorageLocation) -> Unit
             ): Flow<FileOperationProgress> = flow {
                 bridgeCalled = true
                 assertEquals(StorageBackendType.LOCAL, sourceType)

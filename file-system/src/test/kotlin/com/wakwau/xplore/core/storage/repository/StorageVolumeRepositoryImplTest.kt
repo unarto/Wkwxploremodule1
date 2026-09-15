@@ -4,7 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.test.mock.MockContext
+import android.content.ContextWrapper
 import com.wakwau.xplore.core.storage.model.StorageVolumeItem
 import com.wakwau.xplore.core.storage.model.StorageVolumeType
 import com.wakwau.xplore.core.storage.provider.volume.StorageVolumeChangeMonitor
@@ -136,7 +136,7 @@ class StorageVolumeRepositoryImplTest {
 
     private class RecordingContext(
         private val application: Context? = null
-    ) : MockContext() {
+    ) : ContextWrapper(null) {
         var registerCount = 0
         var unregisterCount = 0
         var receiverRegistered = false
