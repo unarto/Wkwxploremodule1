@@ -11,6 +11,8 @@ import com.wakwau.xplore.core.storage.provider.volume.StorageVolumeChangeMonitor
 import com.wakwau.xplore.core.storage.provider.volume.StorageVolumeBroadcastReceiver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -29,13 +31,13 @@ class StorageVolumeRepositoryImplTest {
         val context = RecordingContext()
         val repository = repository(context)
 
-        val first = launch { repository.getVolumes().collect { } }
-        val second = launch { repository.getVolumes().collect { } }
+        val first = launch(start = CoroutineStart.UNDISPATCHED) { repository.getVolumes().collect { } }
+        val second = launch(start = CoroutineStart.UNDISPATCHED) { repository.getVolumes().collect { } }
         runCurrent()
 
         assertEquals(1, context.registerCount)
-        first.cancel()
-        second.cancel()
+        first.cancelAndJoin()
+        second.cancelAndJoin()
         advanceUntilIdle()
         assertEquals(1, context.unregisterCount)
         repository.close()
@@ -48,7 +50,7 @@ class StorageVolumeRepositoryImplTest {
 
         val collector = launch { repository.getVolumes().collect { } }
         runCurrent()
-        collector.cancel()
+        collector.cancelAndJoin()
         advanceUntilIdle()
 
         assertEquals(1, context.registerCount)
@@ -63,11 +65,11 @@ class StorageVolumeRepositoryImplTest {
 
         val first = launch { repository.getVolumes().collect { } }
         runCurrent()
-        first.cancel()
+        first.cancelAndJoin()
         advanceUntilIdle()
         val second = launch { repository.getVolumes().collect { } }
         runCurrent()
-        second.cancel()
+        second.cancelAndJoin()
         advanceUntilIdle()
 
         assertEquals(2, context.registerCount)
@@ -102,7 +104,7 @@ class StorageVolumeRepositoryImplTest {
         assertTrue(refreshCancelled)
         assertFalse(repository.lifecycleJob.isActive)
         assertEquals(1, context.unregisterCount)
-        collector.cancel()
+        collector.cancelAndJoin()
     }
 
     @Test
