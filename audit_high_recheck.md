@@ -1,7 +1,7 @@
 # Audit Ulang HIGH-01 s.d. HIGH-08
 
-Tanggal verifikasi: 2026-09-14  
-Basis verifikasi: source production aktual pada commit `6fb5363` (`Rollback incomplete directory copies`).  
+Tanggal verifikasi: 2026-09-14
+Basis verifikasi: source production aktual pada commit `6fb5363` (`Rollback incomplete directory copies`).
 Ruang lingkup: verifikasi statis/source; tidak ada source atau Gradle yang diubah oleh audit ini.
 
 ## Ringkasan status

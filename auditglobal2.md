@@ -1,7 +1,7 @@
 # Audit Global Source Code WKW Xplore
 
-Tanggal audit: 2026-09-14  
-Scope: seluruh source production pada 15 modul yang terdaftar di repository, tidak termasuk `XFiles-1.3.1/`.  
+Tanggal audit: 2026-09-14
+Scope: seluruh source production pada 15 modul yang terdaftar di repository, tidak termasuk `XFiles-1.3.1/`.
 Acuan: `struktur.md`, `ownership.md`, dependency Gradle aktual, serta 275 file production yang ditemukan di bawah `*/src/main/`.
 
 ## Ringkasan Eksekutif
