@@ -53,7 +53,8 @@ open class CrossFilesystemTransferBridge(
         source: StorageLocation,
         destination: StorageLocation,
         sourceType: StorageBackendType,
-        destType: StorageBackendType
+        destType: StorageBackendType,
+        afterDirectoryPublish: suspend (StorageLocation) -> Unit = {}
     ): Flow<FileOperationProgress> = flow {
         val totalBytes = directoryHelper.calculateTotalSize(source, sourceType)
         var totalCopied = 0L
@@ -78,7 +79,7 @@ open class CrossFilesystemTransferBridge(
                     emit(FileOperationProgress(totalCopied, totalBytes, fileName))
                 }
                 currentCoroutineContext().ensureActive()
-                directoryHelper.publishDirectoryStaging(staging, sourceName, destination)
+                directoryHelper.publishDirectoryStaging(staging, sourceName, destination, afterDirectoryPublish)
             } catch (error: Throwable) {
                 try {
                     kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
@@ -109,20 +110,31 @@ open class CrossFilesystemTransferBridge(
         destType: StorageBackendType
     ): Flow<FileOperationProgress> = flow {
         val isSourceDir = directoryHelper.isSourceDirectory(source, sourceType)
-        val destinationWasDirectory = directoryHelper.isDestinationDirectory(destination, destType)
-
         try {
-            copyCross(source, destination, sourceType, destType).collect { progress ->
-                emit(progress)
+            if (isSourceDir) {
+                copyCross(source, destination, sourceType, destType) { _ ->
+                    currentCoroutineContext().ensureActive()
+                    directoryHelper.validateTransferComplete(
+                        source,
+                        destination,
+                        sourceType,
+                        destType,
+                        isSourceDir = true
+                    )
+                    currentCoroutineContext().ensureActive()
+                    directoryHelper.deleteSource(source, sourceType)
+                }.collect { emit(it) }
+                return@flow
             }
+
+            copyCross(source, destination, sourceType, destType).collect { emit(it) }
             currentCoroutineContext().ensureActive()
             directoryHelper.validateTransferComplete(
                 source,
                 destination,
                 sourceType,
                 destType,
-                isSourceDir,
-                destinationWasDirectory
+                isSourceDir
             )
             currentCoroutineContext().ensureActive()
             directoryHelper.deleteSource(source, sourceType)

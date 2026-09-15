@@ -183,6 +183,83 @@ class LocalDirectoryOperationHelperTest {
         }
     }
 
+    @Test
+    fun moveValidationFailure_restoresExistingDestination() = runTest {
+        withTempDirectory { root ->
+            val source = File(root, "source").apply { mkdir(); File(this, "new.txt").writeText("new") }
+            val destination = File(root, "destination").apply { mkdir(); File(this, "old.txt").writeText("old") }
+
+            val result = runCatching {
+                LocalDirectoryOperationHelper().copyDirectoryTransactionally(source, destination, 3L, afterPublish = {
+                    throw IOException("validation failed")
+                }) { _, _ -> }
+            }
+
+            assertTrue(result.isFailure)
+            assertEquals("old", File(destination, "old.txt").readText())
+            assertTrue(!File(destination, "new.txt").exists())
+            assertTrue(source.exists())
+        }
+    }
+
+    @Test
+    fun cancellationAfterPublish_restoresExistingDestination() = runTest {
+        withTempDirectory { root ->
+            val source = File(root, "source").apply { mkdir(); File(this, "new.txt").writeText("new") }
+            val destination = File(root, "destination").apply { mkdir(); File(this, "old.txt").writeText("old") }
+
+            val result = runCatching {
+                LocalDirectoryOperationHelper().copyDirectoryTransactionally(source, destination, 3L, afterPublish = {
+                    throw CancellationException("cancelled after publish")
+                }) { _, _ -> }
+            }
+
+            assertTrue(result.exceptionOrNull() is CancellationException)
+            assertEquals("old", File(destination, "old.txt").readText())
+            assertTrue(source.exists())
+        }
+    }
+
+    @Test
+    fun successfulValidation_deletesSourceThenCleansBackup() = runTest {
+        withTempDirectory { root ->
+            val source = File(root, "source").apply { mkdir(); File(this, "new.txt").writeText("new") }
+            val destination = File(root, "destination").apply { mkdir(); File(this, "old.txt").writeText("old") }
+            val helper = LocalDirectoryOperationHelper()
+
+            helper.copyDirectoryTransactionally(source, destination, 3L, afterPublish = {
+                helper.validateDirectoryTree(source, destination)
+                assertTrue(source.deleteRecursively())
+            }) { _, _ -> }
+
+            assertTrue(!source.exists())
+            assertEquals("new", File(destination, "new.txt").readText())
+            assertTrue(root.listFiles().orEmpty().none { it.name.contains(".wkw-") })
+        }
+    }
+
+    @Test
+    fun nestedMismatch_doesNotLoseExistingDestination() = runTest {
+        withTempDirectory { root ->
+            val source = File(root, "source").apply {
+                mkdir(); File(this, "nested").mkdir(); File(this, "nested/item.txt").writeText("new")
+            }
+            val destination = File(root, "destination").apply { mkdir(); File(this, "old.txt").writeText("old") }
+            val helper = LocalDirectoryOperationHelper()
+
+            val result = runCatching {
+                helper.copyDirectoryTransactionally(source, destination, 3L, afterPublish = {
+                    File(destination, "nested/item.txt").delete()
+                    helper.validateDirectoryTree(source, destination)
+                }) { _, _ -> }
+            }
+
+            assertTrue(result.isFailure)
+            assertEquals("old", File(destination, "old.txt").readText())
+            assertTrue(source.exists())
+        }
+    }
+
     private suspend fun withTempDirectory(block: suspend (File) -> Unit) {
         val directory = Files.createTempDirectory("local-directory-helper").toFile()
         try {

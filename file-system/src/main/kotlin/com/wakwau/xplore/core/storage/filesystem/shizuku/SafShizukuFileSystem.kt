@@ -193,6 +193,21 @@ class SafShizukuFileSystem(
             return@flow
         }
 
+        if (isSourceDir) {
+            val totalBytes = transferHandler.calculateTotalSize(service, source.path)
+            var copied = 0L
+            transferHandler.copyDirectoryTransactionally(service, source.path, destination.path, totalBytes, afterPublish = {
+                currentCoroutineContext().ensureActive()
+                transferHandler.validateDirectoryTree(service, source.path, destination.path)
+                currentCoroutineContext().ensureActive()
+                delete(source)
+            }) { bytes, name ->
+                copied += bytes
+                emit(FileOperationProgress(copied, totalBytes, name))
+            }
+            return@flow
+        }
+
         copy(source, destination).collect { emit(it) }
 
         if (currentCoroutineContext().isActive) {

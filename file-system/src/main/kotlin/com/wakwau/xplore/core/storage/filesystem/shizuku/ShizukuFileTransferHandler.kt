@@ -92,6 +92,7 @@ class ShizukuFileTransferHandler {
         sourcePath: String,
         destinationPath: String,
         totalBytes: Long,
+        afterPublish: suspend () -> Unit = {},
         onProgress: suspend (Long, String) -> Unit
     ) {
         val staging = "$destinationPath.wkw-${java.util.UUID.randomUUID()}.tmp"
@@ -99,7 +100,7 @@ class ShizukuFileTransferHandler {
             if (!service.createDirectory(staging)) throw IOException("Failed to create Shizuku staging directory: $staging")
             copyDirectoryRecursively(service, sourcePath, staging, totalBytes, onProgress)
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            publishDirectory(service, staging, destinationPath)
+            publishDirectory(service, staging, destinationPath, afterPublish)
         } catch (error: Throwable) {
             try { if (service.exists(staging) && !service.delete(staging)) throw IOException("Failed to remove Shizuku staging directory: $staging") }
             catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
@@ -107,21 +108,53 @@ class ShizukuFileTransferHandler {
         }
     }
 
-    private fun publishDirectory(service: IPrivilegedFileService, staging: String, destination: String) {
-        if (!service.exists(destination)) {
-            if (!service.rename(staging, destination)) throw IOException("Failed to publish Shizuku directory: $destination")
-            return
-        }
-        val backup = "$destination.wkw-${java.util.UUID.randomUUID()}.bak"
-        if (!service.rename(destination, backup)) throw IOException("Failed to preserve Shizuku destination: $destination")
+    private suspend fun publishDirectory(service: IPrivilegedFileService, staging: String, destination: String, afterPublish: suspend () -> Unit) {
+        val backup = if (service.exists(destination)) {
+            "$destination.wkw-${java.util.UUID.randomUUID()}.bak".also {
+                if (!service.rename(destination, it)) throw IOException("Failed to preserve Shizuku destination: $destination")
+            }
+        } else null
         try {
             if (!service.rename(staging, destination)) throw IOException("Failed to publish Shizuku directory: $destination")
-            if (!service.delete(backup) && service.exists(backup)) throw IOException("Failed to remove Shizuku directory backup: $backup")
+            afterPublish()
         } catch (error: Throwable) {
             if (service.exists(destination) && !service.delete(destination)) error.addSuppressed(IOException("Failed to remove failed Shizuku publish: $destination"))
-            if (!service.rename(backup, destination)) error.addSuppressed(IOException("Failed to restore Shizuku destination: $destination"))
+            if (backup != null && !service.rename(backup, destination)) error.addSuppressed(IOException("Failed to restore Shizuku destination: $destination"))
             throw error
         }
+        if (backup != null && !service.delete(backup) && service.exists(backup)) {
+            throw IOException("Move committed but failed to remove Shizuku directory backup: $backup")
+        }
+    }
+
+    suspend fun validateDirectoryTree(service: IPrivilegedFileService, source: String, destination: String) {
+        if (directoryManifest(service, source) != directoryManifest(service, destination)) {
+            throw IOException("Shizuku directory move validation failed: destination subtree differs from source")
+        }
+    }
+
+    private suspend fun directoryManifest(service: IPrivilegedFileService, root: String): Map<String, Pair<Boolean, Long>> {
+        val result = linkedMapOf<String, Pair<Boolean, Long>>()
+        val queue = ArrayDeque<Pair<String, String>>()
+        queue.add(root to "")
+        while (queue.isNotEmpty()) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val (directory, prefix) = queue.removeFirst()
+            if (!service.exists(directory) || !service.isDirectory(directory)) throw IOException("Expected Shizuku directory during validation: $directory")
+            for (entry in service.listDirectory(directory)) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val name = entry.getString(ShizukuIpcConstants.KEY_NAME)
+                    ?: throw IOException("Invalid Shizuku entry during validation: $directory")
+                if (name == "." || name == "..") continue
+                val path = entry.getString(ShizukuIpcConstants.KEY_PATH)
+                    ?: throw IOException("Invalid Shizuku path during validation: $directory/$name")
+                val isDirectory = entry.getBoolean(ShizukuIpcConstants.KEY_IS_DIRECTORY)
+                val relative = if (prefix.isEmpty()) name else "$prefix/$name"
+                result[relative] = isDirectory to if (isDirectory) 0L else service.length(path)
+                if (isDirectory) queue.add(path to relative)
+            }
+        }
+        return result
     }
 
     suspend fun copyDirectoryRecursively(

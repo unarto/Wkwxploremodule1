@@ -146,6 +146,7 @@ class RootDirectoryListingHelper(
         sourceDir: SuFile,
         destDir: SuFile,
         totalBytes: Long,
+        afterPublish: suspend () -> Unit = {},
         onProgress: suspend (Long, String) -> Unit
     ) {
         val parent = destDir.parentFile ?: throw IOException("Destination has no parent: ${destDir.absolutePath}")
@@ -155,28 +156,54 @@ class RootDirectoryListingHelper(
             if (!staging.mkdir()) throw IOException("Failed to create root staging directory: ${staging.absolutePath}")
             copyDirectoryRecursively(sourceDir, staging, totalBytes, onProgress)
             currentCoroutineContext().ensureActive()
-            publishDirectory(staging, destDir)
+            publishDirectory(staging, destDir, afterPublish)
         } catch (error: Throwable) {
             try { withContext(NonCancellable) { if (staging.exists()) deleteDirectoryRecursively(staging) } } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
             throw error
         }
     }
 
-    private suspend fun publishDirectory(staging: SuFile, destination: SuFile) {
-        if (!destination.exists()) {
-            if (!staging.renameTo(destination)) throw IOException("Failed to publish root directory: ${destination.absolutePath}")
-            return
+    private suspend fun publishDirectory(staging: SuFile, destination: SuFile, afterPublish: suspend () -> Unit) {
+        val backup = destination.takeIf { it.exists() }?.let {
+            SuFile(destination.parentFile, ".${destination.name}.wkw-${java.util.UUID.randomUUID()}.bak").also { backup ->
+                if (!destination.renameTo(backup)) throw IOException("Failed to preserve root destination: ${destination.absolutePath}")
+            }
         }
-        val backup = SuFile(destination.parentFile, ".${destination.name}.wkw-${java.util.UUID.randomUUID()}.bak")
-        if (!destination.renameTo(backup)) throw IOException("Failed to preserve root destination: ${destination.absolutePath}")
         try {
             if (!staging.renameTo(destination)) throw IOException("Failed to publish root directory: ${destination.absolutePath}")
-            deleteDirectoryRecursively(backup)
+            afterPublish()
         } catch (error: Throwable) {
             if (destination.exists()) try { deleteDirectoryRecursively(destination) } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
-            if (!backup.renameTo(destination)) error.addSuppressed(IOException("Failed to restore root destination: ${destination.absolutePath}"))
+            if (backup != null && !backup.renameTo(destination)) error.addSuppressed(IOException("Failed to restore root destination: ${destination.absolutePath}"))
             throw error
         }
+        if (backup != null) withContext(NonCancellable) { deleteDirectoryRecursively(backup) }
+    }
+
+    suspend fun validateDirectoryTree(source: SuFile, destination: SuFile) {
+        if (directoryManifest(source) != directoryManifest(destination)) {
+            throw IOException("Root directory move validation failed: destination subtree differs from source")
+        }
+    }
+
+    private suspend fun directoryManifest(root: SuFile): Map<String, Pair<Boolean, Long>> {
+        val result = linkedMapOf<String, Pair<Boolean, Long>>()
+        val queue = ArrayDeque<Pair<SuFile, String>>()
+        queue.add(root to "")
+        while (queue.isNotEmpty()) {
+            currentCoroutineContext().ensureActive()
+            val (directory, prefix) = queue.removeFirst()
+            if (!directory.isDirectory) throw IOException("Expected root directory during validation: ${directory.absolutePath}")
+            val children = directory.listFiles()
+                ?: throw IOException("Failed to list root directory during validation: ${directory.absolutePath}")
+            for (child in children) {
+                currentCoroutineContext().ensureActive()
+                val path = if (prefix.isEmpty()) child.name else "$prefix/${child.name}"
+                result[path] = child.isDirectory to if (child.isDirectory) 0L else child.length()
+                if (child.isDirectory) queue.add(child to path)
+            }
+        }
+        return result
     }
 
     suspend fun copyDirectoryRecursively(

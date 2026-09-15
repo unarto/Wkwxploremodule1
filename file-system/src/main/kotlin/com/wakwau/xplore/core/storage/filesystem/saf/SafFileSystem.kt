@@ -207,6 +207,24 @@ class SafFileSystem(
             ?: StorageConstants.DEFAULT_UNKNOWN_FILE_NAME
         val cleanDestPath = destination.path.substringBefore("#")
 
+        if (isSourceDir) {
+            val destinationParent = uriResolver.resolveTreeDocumentFile(Uri.parse(cleanDestPath))
+                ?: uriResolver.resolveDocumentFile(Uri.parse(cleanDestPath))
+                ?: throw FileNotFoundException("Move failed: SAF destination cannot be resolved ($cleanDestPath)")
+            val totalBytes = streamTransferHelper.calculateTotalSize(sourceDoc)
+            var copied = 0L
+            streamTransferHelper.copyDirectoryTransactionally(sourceDoc, destinationParent, targetName, totalBytes, afterPublish = { published ->
+                currentCoroutineContext().ensureActive()
+                streamTransferHelper.validateDirectoryTree(sourceDoc, published)
+                currentCoroutineContext().ensureActive()
+                delete(source)
+            }) { bytes, name ->
+                copied += bytes
+                emit(FileOperationProgress(copied, totalBytes, name))
+            }
+            return@flow
+        }
+
         copy(source, destination).collect { progress ->
             emit(progress)
         }

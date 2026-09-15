@@ -216,6 +216,20 @@ class LocalFileSystem(
             return@flow
         }
 
+        if (isSourceDir) {
+            var copied = 0L
+            directoryOperationHelper.copyDirectoryTransactionally(sourceFile, destFile, sourceLength, afterPublish = {
+                currentCoroutineContext().ensureActive()
+                directoryOperationHelper.validateDirectoryTree(sourceFile, destFile)
+                currentCoroutineContext().ensureActive()
+                delete(sourcePath)
+            }) { bytes, name ->
+                copied += bytes
+                emit(FileOperationProgress(copied, sourceLength, name))
+            }
+            return@flow
+        }
+
         // Fallback ke copy lalu delete jika beda mount point
         copy(sourcePath, destPath).collect { progress ->
             emit(progress)

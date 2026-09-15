@@ -135,6 +135,7 @@ class LocalDirectoryOperationHelper(
         sourceDir: File,
         destDir: File,
         totalBytes: Long,
+        afterPublish: suspend () -> Unit = {},
         onProgress: suspend (Long, String) -> Unit
     ) {
         val parent = destDir.parentFile ?: throw IOException("Destination has no parent: ${destDir.absolutePath}")
@@ -144,7 +145,7 @@ class LocalDirectoryOperationHelper(
             if (!staging.mkdir()) throw IOException("Failed to create staging directory: ${staging.absolutePath}")
             copyDirectoryRecursively(sourceDir, staging, totalBytes, onProgress)
             currentCoroutineContext().ensureActive()
-            publishDirectory(staging, destDir)
+            publishDirectory(staging, destDir, afterPublish)
         } catch (error: Throwable) {
             try { if (staging.exists()) staging.deleteRecursively() } catch (cleanup: Throwable) {
                 error.addSuppressed(cleanup)
@@ -153,21 +154,53 @@ class LocalDirectoryOperationHelper(
         }
     }
 
-    private fun publishDirectory(staging: File, destination: File) {
-        if (!destination.exists()) {
-            if (!staging.renameTo(destination)) throw IOException("Failed to publish directory: ${destination.absolutePath}")
-            return
+    private suspend fun publishDirectory(staging: File, destination: File, afterPublish: suspend () -> Unit) {
+        val backup = destination.takeIf { it.exists() }?.let {
+            File(destination.parentFile, ".${destination.name}.wkw-${java.util.UUID.randomUUID()}.bak").also { backup ->
+                if (!destination.renameTo(backup)) throw IOException("Failed to preserve destination: ${destination.absolutePath}")
+            }
         }
-        val backup = File(destination.parentFile, ".${destination.name}.wkw-${java.util.UUID.randomUUID()}.bak")
-        if (!destination.renameTo(backup)) throw IOException("Failed to preserve destination: ${destination.absolutePath}")
         try {
             if (!staging.renameTo(destination)) throw IOException("Failed to publish directory: ${destination.absolutePath}")
-            if (!backup.deleteRecursively() && backup.exists()) throw IOException("Failed to remove directory backup: ${backup.absolutePath}")
+            afterPublish()
         } catch (error: Throwable) {
             if (destination.exists()) destination.deleteRecursively()
-            if (!backup.renameTo(destination)) error.addSuppressed(IOException("Failed to restore destination: ${destination.absolutePath}"))
+            if (backup != null && !backup.renameTo(destination)) {
+                error.addSuppressed(IOException("Failed to restore destination: ${destination.absolutePath}"))
+            }
             throw error
         }
+        if (backup != null && !backup.deleteRecursively() && backup.exists()) {
+            throw IOException("Move committed but failed to remove directory backup: ${backup.absolutePath}")
+        }
+    }
+
+    suspend fun validateDirectoryTree(source: File, destination: File) {
+        val sourceManifest = directoryManifest(source)
+        val destinationManifest = directoryManifest(destination)
+        if (sourceManifest != destinationManifest) {
+            throw IOException("Directory move validation failed: destination subtree differs from source")
+        }
+    }
+
+    private suspend fun directoryManifest(root: File): Map<String, Pair<Boolean, Long>> {
+        val result = linkedMapOf<String, Pair<Boolean, Long>>()
+        val queue = ArrayDeque<Pair<File, String>>()
+        queue.add(root to "")
+        while (queue.isNotEmpty()) {
+            currentCoroutineContext().ensureActive()
+            val (directory, prefix) = queue.removeFirst()
+            if (!directory.isDirectory) throw IOException("Expected directory during validation: ${directory.absolutePath}")
+            val children = directoryEntries(directory)
+                ?: throw IOException("Failed to list directory during validation: ${directory.absolutePath}")
+            for (child in children) {
+                currentCoroutineContext().ensureActive()
+                val path = if (prefix.isEmpty()) child.name else "$prefix/${child.name}"
+                result[path] = child.isDirectory to if (child.isDirectory) 0L else child.length()
+                if (child.isDirectory) queue.add(child to path)
+            }
+        }
+        return result
     }
 
     suspend fun copyDirectoryRecursively(

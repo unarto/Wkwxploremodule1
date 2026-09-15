@@ -219,6 +219,21 @@ class RootFileSystem(
             return@flow
         }
 
+        if (isSourceDir) {
+            val totalBytes = directoryListingHelper.calculateTotalSize(sourceFile)
+            var copied = 0L
+            directoryListingHelper.copyDirectoryTransactionally(sourceFile, destFile, totalBytes, afterPublish = {
+                currentCoroutineContext().ensureActive()
+                directoryListingHelper.validateDirectoryTree(sourceFile, destFile)
+                currentCoroutineContext().ensureActive()
+                delete(source)
+            }) { bytes, name ->
+                copied += bytes
+                emit(FileOperationProgress(copied, totalBytes, name))
+            }
+            return@flow
+        }
+
         copy(source, destination).collect { progress ->
             emit(progress)
         }

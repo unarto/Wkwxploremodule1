@@ -97,6 +97,7 @@ class SafStreamTransferHelper(private val context: Context) {
         destParentDir: DocumentFile,
         targetName: String?,
         totalBytes: Long,
+        afterPublish: suspend (DocumentFile) -> Unit = {},
         onProgress: suspend (Long, String) -> Unit
     ) {
         val finalName = targetName ?: sourceDir.name ?: StorageConstants.DEFAULT_UNKNOWN_FILE_NAME
@@ -106,7 +107,7 @@ class SafStreamTransferHelper(private val context: Context) {
         try {
             copyDirectoryContents(sourceDir, staging, totalBytes, onProgress)
             currentCoroutineContext().ensureActive()
-            publishDirectory(destParentDir, staging, finalName)
+            publishDirectory(destParentDir, staging, finalName, afterPublish)
         } catch (error: Throwable) {
             try { if (staging.exists() && !staging.delete()) throw IOException("Failed to remove SAF staging directory: $stagingName") }
             catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
@@ -114,21 +115,30 @@ class SafStreamTransferHelper(private val context: Context) {
         }
     }
 
-    private fun publishDirectory(parent: DocumentFile, staging: DocumentFile, finalName: String) {
+    private suspend fun publishDirectory(
+        parent: DocumentFile,
+        staging: DocumentFile,
+        finalName: String,
+        afterPublish: suspend (DocumentFile) -> Unit
+    ) {
         val existing = parent.findFile(finalName)
-        if (existing == null) {
-            if (!staging.renameTo(finalName)) throw IOException("Failed to publish SAF directory: $finalName")
-            return
+        val backupName = existing?.let {
+            ".$finalName.wkw-${UUID.randomUUID()}.bak".also { backup ->
+                if (!existing.renameTo(backup)) throw IOException("Failed to preserve SAF destination: $finalName")
+            }
         }
-        val backupName = ".$finalName.wkw-${UUID.randomUUID()}.bak"
-        if (!existing.renameTo(backupName)) throw IOException("Failed to preserve SAF destination: $finalName")
         try {
             if (!staging.renameTo(finalName)) throw IOException("Failed to publish SAF directory: $finalName")
-            if (!existing.delete() && existing.exists()) throw IOException("Failed to remove SAF directory backup: $backupName")
+            val published = parent.findFile(finalName)
+                ?: throw IOException("Published SAF directory cannot be resolved: $finalName")
+            afterPublish(published)
         } catch (error: Throwable) {
             parent.findFile(finalName)?.let { if (!it.delete()) error.addSuppressed(IOException("Failed to remove failed SAF publish: $finalName")) }
-            if (!existing.renameTo(finalName)) error.addSuppressed(IOException("Failed to restore SAF destination: $finalName"))
+            if (existing != null && !existing.renameTo(finalName)) error.addSuppressed(IOException("Failed to restore SAF destination: $finalName"))
             throw error
+        }
+        if (existing != null && !existing.delete() && existing.exists()) {
+            throw IOException("Move committed but failed to remove SAF directory backup: $backupName")
         }
     }
 
@@ -144,6 +154,31 @@ class SafStreamTransferHelper(private val context: Context) {
             if (child.isDirectory) copyDirectoryRecursively(child, targetDir, null, totalBytes, onProgress)
             else copySingleFile(child, targetDir, null, totalBytes, onProgress)
         }
+    }
+
+    suspend fun validateDirectoryTree(source: DocumentFile, destination: DocumentFile) {
+        if (directoryManifest(source) != directoryManifest(destination)) {
+            throw IOException("SAF directory move validation failed: destination subtree differs from source")
+        }
+    }
+
+    private suspend fun directoryManifest(root: DocumentFile): Map<String, Pair<Boolean, Long>> {
+        val result = linkedMapOf<String, Pair<Boolean, Long>>()
+        val queue = ArrayDeque<Pair<DocumentFile, String>>()
+        queue.add(root to "")
+        while (queue.isNotEmpty()) {
+            currentCoroutineContext().ensureActive()
+            val (directory, prefix) = queue.removeFirst()
+            if (!directory.isDirectory) throw IOException("Expected SAF directory during validation: ${directory.uri}")
+            for (child in listChildrenOrThrow(directory)) {
+                currentCoroutineContext().ensureActive()
+                val name = child.name ?: throw IOException("Unnamed SAF child during validation: ${child.uri}")
+                val relative = if (prefix.isEmpty()) name else "$prefix/$name"
+                result[relative] = child.isDirectory to if (child.isDirectory) 0L else child.length()
+                if (child.isDirectory) queue.add(child to relative)
+            }
+        }
+        return result
     }
 
     suspend fun copyDirectoryRecursively(
