@@ -22,20 +22,6 @@ class RootDirectoryListingHelper(
     private val streamTransferHelper: RootStreamTransferHelper = RootStreamTransferHelper()
 ) {
 
-    private val protectedPaths = setOf(
-        "/storage",
-        "/storage/emulated",
-        "/system",
-        "/vendor",
-        "/apex",
-        "/proc",
-        "/sys",
-        "/dev",
-        "/etc",
-        "/bin",
-        "/sbin"
-    )
-
     fun listFiles(
         location: StorageLocation,
         showHidden: Boolean
@@ -247,14 +233,6 @@ class RootDirectoryListingHelper(
             }
         }
         return size
-    }
-
-    fun isProtectedRootPath(path: String): Boolean {
-        val clean = path.trim().trimEnd('/')
-        if (clean.isEmpty() || clean == "/" || clean == StorageConstants.ROOT_PATH) return true
-        val primaryStorage = StorageConstants.DEFAULT_PRIMARY_STORAGE_PATH.trimEnd('/')
-        if (clean.equals(primaryStorage, ignoreCase = true)) return true
-        return protectedPaths.contains(clean.lowercase())
     }
 
     fun escapeShellArg(arg: String): String {

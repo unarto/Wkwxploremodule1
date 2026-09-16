@@ -5,6 +5,7 @@ package com.wakwau.xplore.core.storage.filesystem.saf
 import android.content.Context
 import android.net.Uri
 import com.wakwau.xplore.core.storage.constant.StorageConstants
+import com.wakwau.xplore.core.storage.filesystem.ProtectedPathPolicy
 import com.wakwau.xplore.core.storage.filesystem.SafFileSystemContract
 import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.storage.model.FileMetadata
@@ -105,8 +106,7 @@ class SafFileSystem(
     }
 
     override suspend fun delete(location: StorageLocation) {
-        val pathClean = location.path.trim().trimEnd('/')
-        if (pathClean.isEmpty() || pathClean == "/" || pathClean.equals("/storage", ignoreCase = true) || pathClean.equals("/storage/emulated", ignoreCase = true)) {
+        if (ProtectedPathPolicy.isProtectedPath(location.path)) {
             throw SecurityException("Cannot delete root or protected storage path: ${location.path}")
         }
         val documentFile = uriResolver.resolveDocumentFile(Uri.parse(location.path))
@@ -123,6 +123,9 @@ class SafFileSystem(
     }
 
     override suspend fun rename(location: StorageLocation, newName: String): FileItem {
+        if (ProtectedPathPolicy.isProtectedPath(location.path)) {
+            throw SecurityException("Cannot rename root or protected storage path: ${location.path}")
+        }
         val documentFile = uriResolver.resolveDocumentFile(Uri.parse(location.path))
             ?: throw FileNotFoundException("Invalid SAF URI: ${location.path}")
         if (!documentFile.exists()) {

@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import com.topjohnwu.superuser.Shell
 import com.topjohnwu.superuser.io.SuFile
 import com.wakwau.xplore.core.storage.constant.StorageConstants
+import com.wakwau.xplore.core.storage.filesystem.ProtectedPathPolicy
 import com.wakwau.xplore.core.storage.filesystem.RootFileSystemContract
 import com.wakwau.xplore.core.storage.model.FileItem
 import com.wakwau.xplore.core.storage.model.FileMetadata
@@ -57,7 +58,7 @@ class RootFileSystem(
 
     override suspend fun delete(location: StorageLocation) = withContext(ioDispatcher) {
         ensureRootAccess()
-        if (directoryListingHelper.isProtectedRootPath(location.path)) {
+        if (ProtectedPathPolicy.isProtectedPath(location.path)) {
             throw SecurityException("Cannot delete root or protected storage path: ${location.path}")
         }
 
@@ -80,6 +81,10 @@ class RootFileSystem(
         newName: String
     ): FileItem = withContext(ioDispatcher) {
         ensureRootAccess()
+
+        if (ProtectedPathPolicy.isProtectedPath(location.path)) {
+            throw SecurityException("Cannot rename root or protected storage path: ${location.path}")
+        }
 
         val trimmedName = newName.trim()
         if (trimmedName.isEmpty() || trimmedName.contains("/") || trimmedName.contains("\\") || trimmedName == ".." || trimmedName == ".") {
